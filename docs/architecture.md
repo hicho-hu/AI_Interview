@@ -1,6 +1,6 @@
 # 技术架构与实施清单
 
-来源：需求说明书 V1.0、开发设计方案 V1.0、Python Framework Selection V1.0。
+来源：需求说明书 V1.0、开发设计方案 V1.0、Python Framework Selection V1.0。数据库选型按用户后续要求由 PostgreSQL 切换为 MySQL 8.4。
 用户已授权直接实施所有阶段。设计方案的细化状态枚举作为统一契约。
 
 ## 目录与依赖
@@ -13,9 +13,9 @@ app/schemas（HTTP 与 AI 输出契约）
 alembic/（版本化数据库） tests/ deploy/ docs/
 ```
 
-API/Worker 独立运行；PostgreSQL 为事实源；Redis 为 Celery broker、限流、短锁和热缓存；S3/COS/MinIO 私有桶签名直传。
-本地开发可用 SQLite + local storage + MOCK Provider；eager 模式在提交事务后处理持久化任务，用于开发和测试。
-生产禁止 mock、local storage、eager、SQLite 和开发密钥。实际 LLM/ASR/TTS 可走兼容协议 Adapter 或自有 HTTP Gateway Adapter；契约见 provider-contract.md。
+API/Worker 独立运行；MySQL 8.4 为事实源；Redis 为 Celery broker、限流、短锁和热缓存；S3/COS/MinIO 私有桶签名直传。
+默认开发与部署连接 MySQL + Redis；SQLite 仅保留为可选测试后端。eager 模式在提交事务后处理持久化任务，用于本地开发和测试。
+生产必须使用 MySQL，禁止 mock、local storage、eager、SQLite 和开发密钥。实际 LLM/ASR/TTS 可走兼容协议 Adapter 或自有 HTTP Gateway Adapter；契约见 provider-contract.md。
 
 ## ER
 
@@ -39,7 +39,8 @@ erDiagram
  users ||--o{ audit_logs : actions
 ```
 
-UUID 字符串主键，UTC 时间，JSON 在 PostgreSQL 映射 JSONB。JD/简历/转写/报告加密；媒体不进库。
+UUID 字符串主键，UTC DATETIME(6)，原生 JSON。表使用 InnoDB、utf8mb4/utf8mb4_0900_bin；加密文本使用 LONGTEXT。JD/简历/转写/报告加密；媒体不进库。
+MySQL 连接使用 READ COMMITTED、UTC 时区、连接回收与存活检查；循环外键在新迁移 f4c8a1d2e903 中统一补齐。
 interviews 版本列实现乐观锁；额度使用条件 UPDATE；幂等记录含请求哈希，冲突返回 409。
 可靠任务用 outbox + lease + at-least-once，业务写与任务成功同事务；重试不重复创建轮次或扣额度。Celery 调度后使用 QUEUED 租约防止重复灌入 broker；过期租约可恢复。
 

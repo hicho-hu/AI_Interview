@@ -2,7 +2,7 @@ x-app: &app
   build: .
   environment: &environment
     ENVIRONMENT: development
-    DATABASE_URL: postgresql+psycopg://interview:interview-local@postgres:5432/interview
+    DATABASE_URL: mysql+pymysql://interview:interview-local@mysql:3306/interview?charset=utf8mb4
     REDIS_URL: redis://redis:6379/0
     TASK_MODE: worker
     STORAGE_BACKEND: s3
@@ -22,19 +22,24 @@ x-app: &app
       condition: service_completed_successfully
 
 services:
-  postgres:
-    image: postgres:16-alpine
+  mysql:
+    image: mysql:8.4
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_bin", "--default-time-zone=+00:00"]
     environment:
-      POSTGRES_USER: interview
-      POSTGRES_PASSWORD: interview-local
-      POSTGRES_DB: interview
-    volumes: ["postgres-data:/var/lib/postgresql/data"]
+      MYSQL_ROOT_PASSWORD: root-local-interview
+      MYSQL_USER: interview
+      MYSQL_PASSWORD: interview-local
+      MYSQL_DATABASE: interview
+    volumes: ["mysql-data:/var/lib/mysql"]
+    ports: ["127.0.0.1:3306:3306"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U interview"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 3s
-      retries: 20
+      timeout: 3s
+      retries: 40
   redis:
     image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -62,7 +67,7 @@ services:
     command: alembic upgrade head
     healthcheck: {disable: true}
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
   api:
     <<: *app
@@ -77,5 +82,5 @@ services:
     healthcheck: {disable: true}
 
 volumes:
-  postgres-data:
+  mysql-data:
   media-data:

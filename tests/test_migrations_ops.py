@@ -10,7 +10,7 @@ from app.db.repository import Database
 from tests.conftest import data, login
 
 
-def test_migration_round_trip_and_postgres_sql(tmp_path):
+def test_migration_round_trip_and_mysql_sql(tmp_path):
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     url = f"sqlite:///{tmp_path}/migrate.db"
     config.attributes["database_url"] = url
@@ -24,12 +24,29 @@ def test_migration_round_trip_and_postgres_sql(tmp_path):
     db.engine.dispose()
     output = io.StringIO()
     config.output_buffer = output
-    config.attributes["database_url"] = "postgresql+psycopg://test:test@localhost/test"
+    config.attributes["database_url"] = "mysql+pymysql://test:test@localhost/test?charset=utf8mb4"
     command.upgrade(config, "head", sql=True)
     sql = output.getvalue()
-    assert "JSONB" in sql
+    assert "JSONB" not in sql and "JSON NOT NULL" in sql
+    assert "DATETIME(6)" in sql and "LONGTEXT" in sql
+    assert sql.count("ENGINE=InnoDB") == 17
+    assert sql.count("COLLATE utf8mb4_0900_bin") == 17
+    assert "RETURNING" not in sql
     assert sql.count("ADD CONSTRAINT fk_interview_resume") == 1
     assert sql.count("ADD CONSTRAINT fk_turn_answer") == 1
+    exported = (Path(__file__).parents[1] / "docs/sql/ai_interview_mysql.sql").read_text(encoding="utf-8")
+    import re
+
+    def normalized(value):
+        value = re.sub(r"^\s*--[^\n]*", "", value, flags=re.M)
+        return re.sub(r"\s+", " ", value).strip()
+
+    assert normalized(exported) == normalized(sql)
+    output = io.StringIO()
+    config.output_buffer = output
+    command.downgrade(config, "head:base", sql=True)
+    assert output.getvalue().count("DROP TABLE ") == 18
+    assert "DROP INDEX" not in output.getvalue()
 
 
 def test_admin_feedback_health_and_validation(client):

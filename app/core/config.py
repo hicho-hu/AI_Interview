@@ -8,9 +8,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     environment: Literal["development", "test", "production"] = "development"
-    database_url: str = "sqlite:///./var/interview.db"
-    redis_url: Optional[str] = None
-    task_mode: Literal["eager", "worker"] = "eager"
+    database_url: str = "mysql+pymysql://interview:interview-local@127.0.0.1:3306/interview?charset=utf8mb4"
+    redis_url: Optional[str] = "redis://127.0.0.1:6379/0"
+    task_mode: Literal["eager", "worker"] = "worker"
     storage_backend: Literal["local", "s3"] = "local"
     storage_path: Path = Path("var/objects")
     public_base_url: str = "http://localhost:8000"
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     def production_guards(self):
         if self.environment == "production":
             required = (
-                self.database_url.startswith("postgresql"),
+                self.database_url.startswith("mysql+pymysql://"),
                 self.redis_url,
                 self.storage_backend == "s3",
                 self.task_mode == "worker",
@@ -69,7 +69,5 @@ class Settings(BaseSettings):
                 self.public_base_url.startswith("https://"),
             )
             if not all(required):
-                raise ValueError(
-                    "生产环境必须配置 PostgreSQL/Redis/S3/Worker/真实 Provider/微信/HTTPS/独立密钥"
-                )
+                raise ValueError("生产环境必须配置 MySQL/Redis/S3/Worker/真实 Provider/微信/HTTPS/独立密钥")
         return self

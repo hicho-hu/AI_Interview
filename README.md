@@ -1,34 +1,40 @@
 # AI 模拟面试后端
 
-基于所提供三份 V1.0 文档实现的模块化单体。FastAPI + Pydantic v2 + SQLAlchemy 2 + Alembic；生产使用 PostgreSQL、Redis/Celery、S3/COS 兼容私有对象存储。生产运行时 Python 3.12，本机 Python 3.9 也可运行开发测试。
+基于所提供三份 V1.0 文档实现的模块化单体，数据库按后续要求切换为 **MySQL 8.4 + Redis**。FastAPI + Pydantic v2 + SQLAlchemy 2 + Alembic；媒体使用 S3/COS 兼容私有对象存储。生产运行时 Python 3.12，本机 Python 3.9 也可运行开发测试。
 
 ## 启动
 
-当前工作区 `.venv` 已安装开发依赖，首次运行：
+推荐完整启动（MySQL、Redis、MinIO、迁移、API、Worker、Beat）：
 
 ```bash
-.venv/bin/alembic upgrade head
-.venv/bin/uvicorn app.main:app --reload
+docker compose up -d --build
 ```
+
+在本机运行 API 时，先启动数据库和 Redis，再迁移：
+
+```bash
+docker compose up -d mysql redis
+.venv/bin/alembic upgrade head
+TASK_MODE=eager .venv/bin/uvicorn app.main:app --reload
+```
+
+上述 eager 是本地任务执行模式，仍使用真实 MySQL/Redis；默认 worker 模式下还需启动 Celery Worker 和 Beat，Compose 会自动启动它们。
 
 新机器使用 uv：
 
 ```bash
 uv sync --locked --extra dev --python 3.12
 uv run alembic upgrade head
-uv run uvicorn app.main:app --reload
+TASK_MODE=eager uv run uvicorn app.main:app --reload
 ```
 
 访问 [Swagger](http://localhost:8000/docs)、[OpenAPI](http://localhost:8000/openapi.json)、[就绪检查](http://localhost:8000/health/ready)。也可在 PyCharm 运行 `main.py`。
-配置项见 `.env.example`，可手动复制为 `.env`。默认 SQLite/local storage/eager/mock，无需外部服务。
+配置项见 `.env.example`，可手动复制为 `.env`。默认数据库连接 `mysql+pymysql://interview:interview-local@127.0.0.1:3306/interview?charset=utf8mb4`，Redis 连接 `redis://127.0.0.1:6379/0`。
+本机默认 local storage/mock Provider；Compose 使用 MinIO、真实 Worker/Beat，并自动创建私有桶和执行迁移。Compose 包含公开的本地测试密码；生产使用独立环境变量和托管凭证。
 
-完整基础设施：
-
-```bash
-docker compose up --build
-```
-
-Compose 会启动 PostgreSQL、Redis、MinIO，创建私有桶、执行迁移，然后启动 API、Worker、Beat。Compose 为本地开发配置，包含公开的本地测试密码；生产使用独立环境变量和托管凭证。
+MySQL 使用 InnoDB、utf8mb4、大小写敏感且保留尾部空格差异的 utf8mb4_0900_bin 排序规则；时间按 UTC 写入 DATETIME(6)，加密简历/报告使用 LONGTEXT，结构化配置使用原生 JSON。
+建表 SQL：[ai_interview_mysql.sql](docs/sql/ai_interview_mysql.sql)。可导入空 MySQL 数据库，或使用 Alembic 初始化，二者选择一种。旧 PostgreSQL 文件仅作历史存档。
+此次切换不删除或自动搬运旧 PostgreSQL/SQLite 数据；已有业务数据需另行执行数据迁移。旧 SQLite 文件仍保留在 var/ 中。
 
 ## 已实现的功能
 
@@ -78,8 +84,8 @@ MP3/M4A/AAC/WebM/MP4 实际校验、视频音轨提取需要 ffmpeg/ffprobe，Do
 .venv/bin/alembic check
 ```
 
-测试用独立临时数据库和合成媒体。可设置 TEST_DATABASE_URL 运行 PostgreSQL 测试，每次测试创建独立 schema；CI 已配置 PostgreSQL 16。
-本机没有 Docker/PostgreSQL/Redis/ffprobe，不能声称在本机完成了这些组件的真实集成验收；已提供 Compose、CI 与离线 PostgreSQL 迁移 SQL 校验。
+测试默认使用独立临时 SQLite 数据库和合成媒体，不依赖外部服务；SQLite 仅为可选测试后端。设置 `TEST_DATABASE_URL=mysql+pymysql://...` 可运行真实 MySQL 测试，每个测试自动创建并清理独立随机数据库，测试账号需具备 CREATE/DROP DATABASE 权限。CI 已切换至 MySQL 8.4。
+MySQL 的真实集成测试会验证迁移往返、元数据一致性、大报告写入及区分大小写的幂等键。当前本机没有 Docker/MySQL/Redis/ffprobe，未声称完成这些组件的本机真实集成验收；已提供 Compose、CI 与离线 MySQL SQL 校验。
 微信与真实 AI/云存储需要自己的凭证；本次未进行收费外部调用。真实支付、周期自动续费会员、云存储账单对账是供应商接入边界，生产不提供模拟支付。MONTHLY 目前为 20 次额度包，不含自动续费及到期扣回逻辑。
 OCR、实时音视频/数字人、报告 PDF 导出、成长曲线是原文档后续增强项，未作为首版必备能力实现。
 单场成本阈值和全局每日成本阈值为软预算，详见 Provider 接入说明。真实音频质量、视频真机、弱网和并发容量需在部署环境验收。

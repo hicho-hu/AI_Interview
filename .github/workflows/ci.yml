@@ -4,14 +4,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
-      postgres:
-        image: postgres:16-alpine
+      mysql:
+        image: mysql:8.4
         env:
-          POSTGRES_USER: interview
-          POSTGRES_PASSWORD: ci-only-password
-          POSTGRES_DB: interview_test
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U interview" --health-interval 5s --health-retries 10
+          MYSQL_ROOT_PASSWORD: ci-only-password
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_DATABASE: interview_test
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci-only-password --silent" --health-interval 5s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -22,5 +22,5 @@ jobs:
       - run: uv run pytest --cov=app --cov-fail-under=80
       - run: uv run pytest
         env:
-          TEST_DATABASE_URL: postgresql+psycopg://interview:ci-only-password@localhost:5432/interview_test
+          TEST_DATABASE_URL: mysql+pymysql://root:ci-only-password@127.0.0.1:3306/interview_test?charset=utf8mb4
       - run: docker compose config --quiet
