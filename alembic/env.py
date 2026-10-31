@@ -1,6 +1,7 @@
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import make_url
 
 from alembic import context
 from app.core.config import Settings
@@ -25,8 +26,21 @@ def run_migrations():
         with context.begin_transaction():
             context.run_migrations()
     else:
+        options = {}
+        if make_url(url).get_backend_name() == "mysql":
+            options = {
+                "isolation_level": "READ COMMITTED",
+                "connect_args": {
+                    "charset": "utf8mb4",
+                    "init_command": "SET time_zone = '+00:00'",
+                    "connect_timeout": 10,
+                },
+            }
         engine = engine_from_config(
-            config.get_section(config.config_ini_section), prefix="sqlalchemy.", poolclass=pool.NullPool
+            config.get_section(config.config_ini_section),
+            prefix="sqlalchemy.",
+            poolclass=pool.NullPool,
+            **options,
         )
         with engine.connect() as connection:
             context.configure(

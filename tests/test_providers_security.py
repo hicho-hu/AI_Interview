@@ -24,6 +24,7 @@ from tests.test_media_identity import SpeechFixture, upload, wav_bytes
 def test_compatible_chat_asr_tts_contracts(client, monkeypatch):
     rt = client.app.state.runtime
     settings = Settings(
+        _env_file=None,
         provider_mode="compatible",
         provider_url="https://example.invalid/v1",
         provider_api_key="test-key",
@@ -66,7 +67,7 @@ def test_compatible_chat_asr_tts_contracts(client, monkeypatch):
 
 
 def test_gateway_errors_are_sanitized(monkeypatch):
-    provider = HTTPProvider(Settings(provider_url="https://example.invalid"))
+    provider = HTTPProvider(Settings(_env_file=None, provider_url="https://example.invalid"))
     monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(503, text="secret upstream response"))
     with pytest.raises(BusinessError, match="AI 服务繁忙"):
         provider.invoke("job", {}, {})
@@ -222,4 +223,4 @@ def test_cleanup_deletes_expired_media(client):
 
 def test_production_requires_real_dependencies():
     with pytest.raises(ValueError, match="生产环境必须配置"):
-        Settings(environment="production")
+        Settings(_env_file=None, environment="production")

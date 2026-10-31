@@ -2,27 +2,28 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
-    Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 
 from app.core.security import new_id, utcnow
+from app.db.schema_docs_v1 import attach_schema_documentation
+from app.db.types import MYSQL_TABLE_OPTIONS, LongText, UTCDateTime
 
 Base = declarative_base()
 Json = JSON().with_variant(JSONB(), "postgresql")
 
 
 class Entity:
+    __table_args__ = MYSQL_TABLE_OPTIONS
     id = Column(String(36), primary_key=True, default=new_id)
-    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    created_at = Column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at = Column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
 
 
 class User(Entity, Base):
@@ -38,13 +39,13 @@ class Consent(Entity, Base):
     user_id = Column(String(36), ForeignKey("users.id"), index=True, nullable=False)
     consent_type = Column(String(30), nullable=False)
     policy_version = Column(String(30), nullable=False)
-    revoked_at = Column(DateTime(timezone=True))
+    revoked_at = Column(UTCDateTime())
 
 
 class RevokedToken(Entity, Base):
     __tablename__ = "revoked_tokens"
     jti = Column(String(36), unique=True, nullable=False)
-    expires_at = Column(DateTime(timezone=True), index=True, nullable=False)
+    expires_at = Column(UTCDateTime(), index=True, nullable=False)
 
 
 class JobProfile(Entity, Base):
@@ -52,8 +53,8 @@ class JobProfile(Entity, Base):
     user_id = Column(String(36), ForeignKey("users.id"), index=True, nullable=False)
     job_title = Column(String(120), nullable=False)
     seniority = Column(String(30), nullable=False)
-    jd_encrypted = Column(Text, nullable=False)
-    profile_encrypted = Column(Text)
+    jd_encrypted = Column(LongText, nullable=False)
+    profile_encrypted = Column(LongText)
     status = Column(String(24), default="PREPARING", nullable=False)
     task_id = Column(String(36))
 
@@ -72,8 +73,8 @@ class MediaAsset(Entity, Base):
     checksum = Column(String(64))
     etag = Column(String(128))
     status = Column(String(24), default="PENDING_UPLOAD", nullable=False)
-    expires_at = Column(DateTime(timezone=True), index=True, nullable=False)
-    deleted_at = Column(DateTime(timezone=True))
+    expires_at = Column(UTCDateTime(), index=True, nullable=False)
+    deleted_at = Column(UTCDateTime())
 
 
 class ResumeAsset(Entity, Base):
@@ -81,8 +82,8 @@ class ResumeAsset(Entity, Base):
     user_id = Column(String(36), ForeignKey("users.id"), index=True, nullable=False)
     asset_id = Column(String(36), ForeignKey("media_assets.id"), unique=True, nullable=False)
     parse_status = Column(String(24), default="PENDING_UPLOAD", nullable=False)
-    text_encrypted = Column(Text)
-    summary_encrypted = Column(Text)
+    text_encrypted = Column(LongText)
+    summary_encrypted = Column(LongText)
     task_id = Column(String(36))
 
 
@@ -98,22 +99,22 @@ class Interview(Entity, Base):
     config_json = Column(Json, nullable=False)
     current_turn_no = Column(Integer, default=0, nullable=False)
     version = Column(Integer, default=1, nullable=False)
-    started_at = Column(DateTime(timezone=True))
-    ended_at = Column(DateTime(timezone=True))
-    paused_at = Column(DateTime(timezone=True))
+    started_at = Column(UTCDateTime())
+    ended_at = Column(UTCDateTime())
+    paused_at = Column(UTCDateTime())
     paused_seconds = Column(Integer, default=0, nullable=False)
     prepare_task_id = Column(String(36))
     report_task_id = Column(String(36))
     failure_code = Column(String(80))
-    deleted_at = Column(DateTime(timezone=True))
+    deleted_at = Column(UTCDateTime())
     __mapper_args__ = {"version_id_col": version}
-    __table_args__ = (Index("ix_interviews_user_created", "user_id", "created_at"),)
+    __table_args__ = (Index("ix_interviews_user_created", "user_id", "created_at"), MYSQL_TABLE_OPTIONS)
 
 
 class InterviewPlan(Entity, Base):
     __tablename__ = "interview_plans"
     interview_id = Column(String(36), ForeignKey("interviews.id"), unique=True, nullable=False)
-    plan_encrypted = Column(Text, nullable=False)
+    plan_encrypted = Column(LongText, nullable=False)
     prompt_version = Column(String(30), default="1.0", nullable=False)
     model_name = Column(String(100), nullable=False)
 
@@ -126,15 +127,15 @@ class Turn(Entity, Base):
     turn_type = Column(String(24), nullable=False)
     main_index = Column(Integer, nullable=False)
     competency = Column(String(120), nullable=False)
-    question_encrypted = Column(Text, nullable=False)
+    question_encrypted = Column(LongText, nullable=False)
     question_asset_id = Column(String(36), ForeignKey("media_assets.id", use_alter=True, name="fk_turn_tts"))
     answer_asset_id = Column(String(36), ForeignKey("media_assets.id", use_alter=True, name="fk_turn_answer"))
-    transcript_encrypted = Column(Text)
+    transcript_encrypted = Column(LongText)
     confidence = Column(JSON)
-    decision_encrypted = Column(Text)
+    decision_encrypted = Column(LongText)
     status = Column(String(24), default="WAITING_ANSWER", nullable=False)
     task_id = Column(String(36))
-    __table_args__ = (UniqueConstraint("interview_id", "turn_no"),)
+    __table_args__ = (UniqueConstraint("interview_id", "turn_no"), MYSQL_TABLE_OPTIONS)
 
 
 class Report(Entity, Base):
@@ -142,10 +143,10 @@ class Report(Entity, Base):
     interview_id = Column(String(36), ForeignKey("interviews.id"), index=True, nullable=False)
     report_version = Column(Integer, nullable=False)
     overall_score = Column(JSON)
-    content_encrypted = Column(Text, nullable=False)
+    content_encrypted = Column(LongText, nullable=False)
     prompt_version = Column(String(30), default="1.0", nullable=False)
     model_name = Column(String(100), nullable=False)
-    __table_args__ = (UniqueConstraint("interview_id", "report_version"),)
+    __table_args__ = (UniqueConstraint("interview_id", "report_version"), MYSQL_TABLE_OPTIONS)
 
 
 class AICallLog(Entity, Base):
@@ -185,8 +186,8 @@ class Order(Entity, Base):
     currency = Column(String(3), default="CNY", nullable=False)
     status = Column(String(24), default="PENDING", nullable=False)
     provider_trade_no = Column(String(120), unique=True)
-    paid_at = Column(DateTime(timezone=True))
-    refunded_at = Column(DateTime(timezone=True))
+    paid_at = Column(UTCDateTime())
+    refunded_at = Column(UTCDateTime())
 
 
 class Task(Entity, Base):
@@ -194,16 +195,16 @@ class Task(Entity, Base):
     user_id = Column(String(36), ForeignKey("users.id"), index=True, nullable=False)
     event_type = Column(String(40), nullable=False)
     aggregate_id = Column(String(36), nullable=False)
-    payload_encrypted = Column(Text)
-    result_encrypted = Column(Text)
+    payload_encrypted = Column(LongText)
+    result_encrypted = Column(LongText)
     status = Column(String(24), default="PENDING", nullable=False)
     retry_count = Column(Integer, default=0, nullable=False)
-    available_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-    lease_until = Column(DateTime(timezone=True))
+    available_at = Column(UTCDateTime(), default=utcnow, nullable=False)
+    lease_until = Column(UTCDateTime())
     lease_token = Column(String(36))
     error_code = Column(String(80))
     request_id = Column(String(80))
-    __table_args__ = (Index("ix_outbox_dispatch", "status", "available_at"),)
+    __table_args__ = (Index("ix_outbox_dispatch", "status", "available_at"), MYSQL_TABLE_OPTIONS)
 
 
 class Idempotency(Entity, Base):
@@ -212,8 +213,8 @@ class Idempotency(Entity, Base):
     scope = Column(String(200), nullable=False)
     key = Column(String(120), nullable=False)
     request_hash = Column(String(64), nullable=False)
-    response_encrypted = Column(Text, nullable=False)
-    __table_args__ = (UniqueConstraint("user_id", "scope", "key"),)
+    response_encrypted = Column(LongText, nullable=False)
+    __table_args__ = (UniqueConstraint("user_id", "scope", "key"), MYSQL_TABLE_OPTIONS)
 
 
 class AuditLog(Entity, Base):
@@ -229,6 +230,14 @@ class Feedback(Entity, Base):
     user_id = Column(String(36), ForeignKey("users.id"), index=True, nullable=False)
     interview_id = Column(String(36), ForeignKey("interviews.id"))
     category = Column(String(30), nullable=False)
-    content_encrypted = Column(Text, nullable=False)
+    content_encrypted = Column(LongText, nullable=False)
     status = Column(String(30), default="OPEN", nullable=False)
-    reply_encrypted = Column(Text)
+    reply_encrypted = Column(LongText)
+
+
+attach_schema_documentation(Base.metadata)
+Base.metadata.tables["users"].c.status.comment = "账号状态：ACTIVE=正常，FROZEN=冻结，DELETING=删除中，DELETED=已删除"
+Base.metadata.tables["user_consents"].c.consent_type.comment = "授权类型：PRIVACY/TERMS/AI_PROCESSING/MICROPHONE/CAMERA/SCREEN_CAPTURE；SUPPORT_REVIEW=后台人工审阅授权"
+
+# Register the new schema after the historical business COMMENT snapshot was applied.
+from app.db import admin_models  # noqa: E402, F401

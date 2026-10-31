@@ -34,11 +34,23 @@ MIMES = {
 }
 
 
+MIMES["SESSION_AUDIO"] = MIMES["AUDIO"]
+MIMES["SESSION_VIDEO"] = MIMES["VIDEO"]
+MIMES["SESSION_CAPTIONS"] = {"text/vtt": {".vtt"}}
+
+
 def aware(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
-def inspect_media(data, mime, kind):
+def inspect_media(data, mime, kind, *, ffprobe_bin="ffprobe"):
+    if kind == "SESSION_CAPTIONS":
+        try:
+            valid = len(data) <= 1024 * 1024 and data.decode("utf-8").startswith("WEBVTT\n")
+        except UnicodeDecodeError:
+            valid = False
+        require(valid, "MEDIA_INVALID_FORMAT", "字幕必须为 UTF-8 WebVTT 文件", 415)
+        return None
     if mime == "application/pdf":
         valid = data.startswith(b"%PDF-")
     elif "wordprocessingml" in mime:
@@ -58,7 +70,7 @@ def inspect_media(data, mime, kind):
     else:
         valid = data.startswith(b"\xff\xd8\xff")
     require(valid, "MEDIA_INVALID_FORMAT", "文件头与声明类型不符", 415)
-    if kind not in ("AUDIO", "VIDEO"):
+    if kind not in ("AUDIO", "VIDEO", "SESSION_AUDIO", "SESSION_VIDEO"):
         return None
     if mime in ("audio/wav", "audio/x-wav"):
         try:
@@ -71,17 +83,40 @@ def inspect_media(data, mime, kind):
             temp.write(data)
             temp.flush()
             result = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", temp.name],
+                [ffprobe_bin, "-v", "error", "-show_format", "-show_streams", "-of", "json", temp.name],
                 capture_output=True,
                 timeout=20,
                 check=True,
             )
-        info = json.loads(result.stdout)
+            info = json.loads(result.stdout)
+            duration = info.get("format", {}).get("duration")
+            if duration in (None, "N/A"):
+                # Browser MediaRecorder WebM files can omit the container duration.
+                # Measure all streams so a longer video cannot bypass the limit.
+                result = subprocess.run(
+                    [
+                        ffprobe_bin,
+                        "-v",
+                        "error",
+                        "-show_entries",
+                        "packet=pts_time,duration_time",
+                        "-of",
+                        "json",
+                        temp.name,
+                    ],
+                    capture_output=True,
+                    timeout=20,
+                    check=True,
+                )
+                packets = json.loads(result.stdout)["packets"]
+                duration = max(float(p["pts_time"]) + float(p["duration_time"]) for p in packets) - min(
+                    float(p["pts_time"]) for p in packets
+                )
         streams = info.get("streams", [])
         require(
             any(s["codec_type"] == "audio" for s in streams), "MEDIA_INVALID_FORMAT", "媒体必须包含音轨", 415
         )
-        if kind == "VIDEO":
+        if kind in ("VIDEO", "SESSION_VIDEO"):
             video = next((s for s in streams if s["codec_type"] == "video"), None)
             require(
                 video and video.get("height", 0) <= 720 and video.get("width", 0) <= 1280,
@@ -89,10 +124,17 @@ def inspect_media(data, mime, kind):
                 "视频须为 720p 或更低分辨率",
                 415,
             )
-        return int(float(info["format"]["duration"]) * 1000)
-    except FileNotFoundError as exc:
-        raise BusinessError("MEDIA_PROCESSOR_UNAVAILABLE", "请安装 ffmpeg/ffprobe 以验证媒体", 503) from exc
-    except (subprocess.SubprocessError, ValueError, KeyError) as exc:
+        return int(float(duration) * 1000)
+    except OSError as exc:
+        raise BusinessError("MEDIA_PROCESSOR_UNAVAILABLE", "录音处理服务暂不可用，请联系管理员", 503) from exc
+    except (
+        subprocess.SubprocessError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        OverflowError,
+    ) as exc:
         raise BusinessError("MEDIA_INVALID_FORMAT", "无法解码媒体文件", 415) from exc
 
 
@@ -100,6 +142,27 @@ class MediaService(Service):
     def upload(self, data, resume=False):
         kind = "RESUME" if resume else data.media_type
         IdentityService(self.rt, self.db, self.uid).require_consents("PRIVACY", "TERMS")
+        session_recording = kind in ("SESSION_AUDIO", "SESSION_VIDEO", "SESSION_CAPTIONS")
+        if session_recording:
+            IdentityService(self.rt, self.db, self.uid).require_consents(
+                "MICROPHONE", *(["CAMERA", "SCREEN_CAPTURE"] if kind == "SESSION_VIDEO" else [])
+            )
+            require(
+                data.interview_id and data.duration_ms,
+                "MEDIA_INTERVIEW_REQUIRED",
+                "整场录制必须关联面试和时长",
+            )
+            interview = owned(self.db, Interview, data.interview_id, self.uid)
+            require(
+                not interview.deleted_at
+                and interview.status
+                in ("IN_PROGRESS", "PAUSED", "FINISHING", "COMPLETED", "REPORT_FAILED", "CANCELLED"),
+                "INTERVIEW_INVALID_STATE",
+                "当前面试不允许保存整场录制",
+                409,
+            )
+            require(data.turn_id is None, "MEDIA_SESSION_SCOPE", "整场录制不能关联单题轮次")
+            require(data.duration_ms <= 7200000, "MEDIA_TOO_LONG", "整场录制最长 2 小时")
         if kind in ("AUDIO", "VIDEO"):
             IdentityService(self.rt, self.db, self.uid).require_consents(
                 "MICROPHONE", *(["CAMERA"] if kind == "VIDEO" else [])
@@ -126,15 +189,31 @@ class MediaService(Service):
         require(
             ext in MIMES[kind].get(data.content_type, set()), "MEDIA_INVALID_FORMAT", "不支持的文件格式", 415
         )
-        maximum = 10 * 1024 * 1024 if kind in ("RESUME", "JD_IMAGE") else self.rt.settings.max_upload_bytes
+        maximum = (
+            512 * 1024 * 1024
+            if session_recording
+            else 10 * 1024 * 1024
+            if kind in ("RESUME", "JD_IMAGE")
+            else self.rt.settings.max_upload_bytes
+        )
         require(data.size <= maximum, "MEDIA_TOO_LARGE", "文件超过限制", 413)
+        if kind == "SESSION_CAPTIONS":
+            require(data.size <= 1024 * 1024, "MEDIA_TOO_LARGE", "字幕文件最大 1 MB", 413)
+        if kind in ("AUDIO", "VIDEO"):
+            require(
+                data.duration_ms and data.duration_ms <= (120000 if kind == "VIDEO" else 180000),
+                "MEDIA_TOO_LONG",
+                "单题录音最长 3 分钟，录像最长 2 分钟",
+            )
         if kind == "VIDEO":
             require(data.duration_ms <= 120000, "MEDIA_TOO_LONG", "视频单段最长 2 分钟")
         asset_id = new_id()
         row = MediaAsset(
             id=asset_id,
             user_id=self.uid,
-            interview_id=data.interview_id if kind in ("AUDIO", "VIDEO") else None,
+            interview_id=data.interview_id
+            if kind in ("AUDIO", "VIDEO", "SESSION_AUDIO", "SESSION_VIDEO", "SESSION_CAPTIONS")
+            else None,
             turn_id=data.turn_id if kind in ("AUDIO", "VIDEO") else None,
             media_type=kind,
             filename=data.filename,
@@ -181,10 +260,20 @@ class MediaService(Service):
         require(
             not data.checksum or data.checksum.lower() == digest, "MEDIA_CHECKSUM_MISMATCH", "SHA256 不一致"
         )
-        duration = inspect_media(content, row.mime_type, row.media_type)
+        duration = inspect_media(
+            content, row.mime_type, row.media_type, ffprobe_bin=self.rt.settings.ffprobe_bin
+        )
         if duration is not None:
             require(
-                0 < duration <= (120000 if row.media_type == "VIDEO" else 180000),
+                0
+                < duration
+                <= (
+                    7200000
+                    if row.media_type in ("SESSION_AUDIO", "SESSION_VIDEO")
+                    else 120000
+                    if row.media_type == "VIDEO"
+                    else 180000
+                ),
                 "MEDIA_TOO_LONG",
                 "媒体实际时长超出范围",
             )

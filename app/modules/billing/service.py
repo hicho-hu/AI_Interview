@@ -41,7 +41,10 @@ class BillingService(Service):
 
     def order(self, data, key):
         def create():
-            product = PRODUCTS[data.product_code]
+            from app.db.admin_models import OrderSnapshot, Product
+            version = self.db.scalar(select(Product).where(Product.code == data.product_code, Product.status == "PUBLISHED").order_by(Product.version.desc()).limit(1))
+            product = ({"name": version.name, "amount_minor": version.amount_minor, "credits": version.credits} if version else PRODUCTS.get(data.product_code))
+            require(product, "PRODUCT_NOT_FOUND", "商品未上架", 404)
             row = Order(
                 user_id=self.uid,
                 product_code=data.product_code,
@@ -50,6 +53,9 @@ class BillingService(Service):
             )
             self.db.add(row)
             self.db.flush()
+            self.db.add(OrderSnapshot(order_id=row.id, product_id=version.id if version else None,
+                                      snapshot_json={"code": data.product_code, "version": version.version if version else 0,
+                                                     "currency": "CNY", **product}))
             self.audit("ORDER_CREATED", row.id)
             return self.order_view(row)
 

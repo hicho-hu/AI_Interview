@@ -10,12 +10,20 @@ from app.schemas.contracts import Envelope, OrderInput
 router = APIRouter(prefix="/billing", tags=["权益与订单"])
 
 
+def catalog(db):
+    from app.db.admin_models import Product
+    rows = db.scalars(select(Product).where(Product.status == "PUBLISHED")).all()
+    configured = {r.code: {"code": r.code, "name": r.name, "amount_minor": r.amount_minor,
+                          "credits": r.credits, "currency": r.currency, "version": r.version} for r in rows}
+    return list(configured.values()) + [{"code": k, **v, "currency": "CNY"} for k, v in PRODUCTS.items() if k not in configured]
+
+
 @router.get("/products", response_model=Envelope)
-def products(request: Request, user=Depends(current_user)):
+def products(request: Request, db=Depends(db_session, scope="function"), user=Depends(current_user)):
     return ok(
         request,
         {
-            "items": [{"code": k, **v, "currency": "CNY"} for k, v in PRODUCTS.items()],
+            "items": catalog(db),
             "payment_enabled": False,
             "development_mock_payment": request.app.state.runtime.settings.environment != "production",
         },

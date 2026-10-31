@@ -79,7 +79,8 @@ def reply(
     require(row, "RESOURCE_NOT_FOUND", "反馈不存在", 404)
     row.status = data.status
     row.reply_encrypted = request.app.state.runtime.security.encrypt(data.reply)
-    service(Service, request, db, user).audit("FEEDBACK_REPLIED", row.id)
+    from app.modules.admin.auth import AdminAuth
+    AdminAuth(request.app.state.runtime, db, request).audit(user.id, "FEEDBACK_REPLIED", row.id)
     return ok(request, {"id": row.id, "status": row.status})
 
 
@@ -136,7 +137,7 @@ def ai_calls(
     )
 
 
-@router.get("/admin/audit-logs", response_model=Envelope)
+@router.get("/admin/business-audit-logs", response_model=Envelope)
 def audits(
     request: Request,
     page: int = Query(1, ge=1),

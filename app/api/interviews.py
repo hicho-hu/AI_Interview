@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request, WebSocket
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.api.dependencies import current_user, db_session, ok, service
@@ -12,6 +13,13 @@ from app.schemas.contracts import Answer, Envelope, Finish, InterviewInput
 from app.workers.processor import retry_task
 
 router = APIRouter(tags=["面试与报告"])
+
+
+@router.websocket("/interviews/{interview_id}/live-transcription")
+async def live_transcription(websocket: WebSocket, interview_id: str):
+    from app.modules.interview.transcription import transcribe_socket
+
+    await transcribe_socket(websocket, interview_id)
 
 
 @router.post("/interviews", response_model=Envelope, status_code=201)
@@ -153,6 +161,37 @@ def report(
 ):
     svc = service(InterviewService, request, db, user)
     return ok(request, svc.report(svc.get(interview_id), version))
+
+
+@router.post("/interviews/{interview_id}/turns/{turn_id}/submit-stream")
+def answer_stream(
+    interview_id: str,
+    turn_id: str,
+    data: Answer,
+    request: Request,
+    idempotency_key: str = Header(...),
+    db=Depends(db_session, scope="function"),
+    user=Depends(current_user),
+):
+    from app.modules.interview.live import answer_events
+
+    svc = service(InterviewService, request, db, user)
+    result = svc.submit(svc.get(interview_id), turn_id, data, idempotency_key)
+    # Reserve this task for the immediate stream runner. If the API dies before
+    # starting it, the normal outbox recovers it after the short lease expires.
+    from datetime import timedelta
+
+    from app.core.security import utcnow
+
+    task = db.get(Task, result["task_id"])
+    if task.status == "PENDING":
+        task.status = "QUEUED"
+        task.lease_until = utcnow() + timedelta(seconds=30)
+    return StreamingResponse(
+        answer_events(svc.rt, user.id, interview_id, result["task_id"], request.state.request_id),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"},
+    )
 
 
 @router.post("/interviews/{interview_id}/report/regenerate", response_model=Envelope, status_code=202)

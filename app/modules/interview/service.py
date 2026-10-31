@@ -3,7 +3,7 @@ from sqlalchemy import select
 from app.core.errors import require
 from app.core.security import utcnow
 from app.core.state import transition
-from app.db.models import Interview, InterviewPlan, JobProfile, MediaAsset, Report, ResumeAsset, Turn
+from app.db.models import Interview, InterviewPlan, JobProfile, MediaAsset, Report, ResumeAsset, Task, Turn
 from app.db.repository import owned
 from app.modules.billing.service import BillingService
 from app.modules.identity.service import IdentityService
@@ -100,6 +100,7 @@ class InterviewService(Service):
             "prepare_task_id": row.prepare_task_id,
             "report_task_id": row.report_task_id,
             "failure_code": row.failure_code,
+            "conversation_features": self.conversation_features(row),
         }
 
     def turn_view(self, turn):
@@ -121,6 +122,14 @@ class InterviewService(Service):
             "task_id": turn.task_id,
             "question_audio": media.view(question_asset) if question_asset else None,
             "answer_media": media.view(answer_asset) if answer_asset else None,
+        }
+
+    def conversation_features(self, row):
+        from app.providers.qwen_realtime import endpoint
+
+        return {
+            "streaming_answers": row.mode != "TEXT",
+            "live_transcription": bool(endpoint(self.rt.settings)),
         }
 
     def start(self, row):
@@ -185,6 +194,13 @@ class InterviewService(Service):
                     "提交时长不一致",
                 )
                 turn.answer_asset_id = asset.id
+                if len(assets) == 1 and data.live_transcript_id:
+                    from app.modules.interview.transcription import verified_transcript
+
+                    text = verified_transcript(self.rt, self.uid, turn.id, data.live_transcript_id, asset)
+                    if text:
+                        turn.transcript_encrypted = self.rt.security.encrypt(text)
+                        turn.confidence = None
                 require(
                     sum(a.duration_ms for a in assets) <= 180000, "MEDIA_TOO_LONG", "单次回答累计最长 3 分钟"
                 )
@@ -264,12 +280,33 @@ class InterviewService(Service):
         return self.idem(f"regenerate:{row.id}", key, {}, regenerate_once)
 
     def report(self, row, version=None):
+        task = (
+            self.db.scalar(
+                select(Task).where(
+                    Task.id == row.report_task_id,
+                    Task.user_id == self.uid,
+                    Task.event_type == "GENERATE_REPORT",
+                    Task.aggregate_id == row.id,
+                )
+            )
+            if row.report_task_id
+            else None
+        )
+        progress = {
+            "status": row.status,
+            "task_id": row.report_task_id,
+            "processing_status": task.status if task else None,
+            "retry_count": task.retry_count if task else 0,
+            "last_error_code": task.error_code if task else None,
+            "failure_code": row.failure_code,
+            "retryable": bool(task and task.status == "FAILED" and row.status == "REPORT_FAILED"),
+        }
         stmt = select(Report).where(Report.interview_id == row.id)
         if version:
             stmt = stmt.where(Report.report_version == version)
         report = self.db.scalar(stmt.order_by(Report.report_version.desc()).limit(1))
         if not report:
-            return {"status": row.status, "task_id": row.report_task_id, "report": None}
+            return {**progress, "report": None}
         result = self.decrypt_json(report.content_encrypted)
         result.update(
             {
@@ -281,4 +318,4 @@ class InterviewService(Service):
                 "is_mock": report.model_name == "mock",
             }
         )
-        return {"status": row.status, "report": result}
+        return {**progress, "report": result}

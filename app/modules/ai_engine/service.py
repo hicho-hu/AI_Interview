@@ -10,6 +10,7 @@ from app.modules.identity.service import IdentityService
 from app.modules.interview.service import InterviewService
 from app.modules.shared import Service
 from app.providers.ai import decode_audio
+from app.providers.live import audio_turn, live_sink, publish
 from app.schemas.contracts import Decision, Plan, SynthesizedAudio, Transcript
 
 
@@ -81,28 +82,46 @@ class EngineService(Service):
         )
         self.db.add(turn)
         self.db.flush()
-        if row.mode != "TEXT":
-            output = self.rt.ai(
-                self.db,
-                self.uid,
-                "tts",
-                {"text": question["text"], "language": row.config_json["language"]},
-                SynthesizedAudio,
-                row.id,
-                turn.id,
-                self.rid,
+        if live_sink.get():
+            self.rt.cache.put(
+                f"live-turn:{self.uid}:{turn.id}", self.encrypt_json({"interview_id": row.id}), 120
             )
+        publish(
+            "question",
+            turn_id=turn.id,
+            text=question["text"],
+            main_index=main_index,
+            turn_no=turn.turn_no,
+            turn_type=kind,
+            competency=turn.competency,
+        )
+        if row.mode != "TEXT":
+            token = audio_turn.set(turn.id)
+            try:
+                output = self.rt.ai(
+                    self.db,
+                    self.uid,
+                    "tts",
+                    {"text": question["text"], "language": row.config_json["language"]},
+                    SynthesizedAudio,
+                    row.id,
+                    turn.id,
+                    self.rid,
+                )
+            finally:
+                audio_turn.reset(token)
             audio = decode_audio(output["audio_base64"])
             if audio:
                 require(
-                    len(audio) <= 10 * 1024 * 1024 and output.get("mime_type") == "audio/mpeg",
+                    len(audio) <= 10 * 1024 * 1024 and output.get("mime_type") in ("audio/mpeg", "audio/wav"),
                     "AI_OUTPUT_INVALID",
                     "TTS 音频格式或大小无效",
                     502,
                 )
                 asset_id = new_id()
-                key = f"{self.rt.settings.environment}/users/{self.uid}/tts/{asset_id}.mp3"
-                self.rt.storage.put(key, audio, "audio/mpeg")
+                extension = "wav" if output["mime_type"] == "audio/wav" else "mp3"
+                key = f"{self.rt.settings.environment}/users/{self.uid}/tts/{asset_id}.{extension}"
+                self.rt.storage.put(key, audio, output["mime_type"])
                 asset = MediaAsset(
                     id=asset_id,
                     user_id=self.uid,
@@ -110,8 +129,8 @@ class EngineService(Service):
                     turn_id=turn.id,
                     media_type="TTS",
                     object_key=key,
-                    filename=f"{asset_id}.mp3",
-                    mime_type="audio/mpeg",
+                    filename=f"{asset_id}.{extension}",
+                    mime_type=output["mime_type"],
                     size_bytes=len(audio),
                     status="READY",
                     expires_at=utcnow() + timedelta(days=self.rt.settings.media_retention_days),
@@ -119,6 +138,7 @@ class EngineService(Service):
                 self.db.add(asset)
                 self.db.flush()
                 turn.question_asset_id = asset.id
+        publish("audio_end", turn_id=turn.id)
         return turn
 
     def answer(self, row, turn, payload=None):
@@ -126,6 +146,7 @@ class EngineService(Service):
             return {"status": row.status, "turn_id": turn.id}
         IdentityService(self.rt, self.db, self.uid).require_consents("PRIVACY", "TERMS", "AI_PROCESSING")
         if not turn.transcript_encrypted:
+            publish("transcribing", turn_id=turn.id)
             asset_ids = (payload or {}).get("asset_ids") or [turn.answer_asset_id]
             transcripts = []
             for asset_id in asset_ids:
@@ -140,6 +161,8 @@ class EngineService(Service):
             checkpoints = checkpoint_buffer.get()
             if checkpoints is not None:
                 checkpoints.append((turn.id, turn.transcript_encrypted, turn.confidence))
+        publish("transcript", turn_id=turn.id, text=self.rt.security.decrypt(turn.transcript_encrypted))
+        publish("thinking", turn_id=turn.id)
         return self.decide(row, turn)
 
     def transcribe(self, row, turn, asset_id):

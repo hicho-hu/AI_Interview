@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException
 
-from app.api import billing, identity, interviews, jobs, media, ops
+from app.api import admin, billing, identity, interviews, jobs, media, ops
 from app.core.errors import BusinessError
 from app.core.security import new_id
 from app.runtime import Runtime
@@ -136,7 +136,7 @@ def create_app(settings=None, runtime=None):
             return error(request, 503, "DEPENDENCY_UNAVAILABLE", "数据库迁移/Redis/对象存储未就绪")
         return {"status": "ready"}
 
-    for router in (identity.router, jobs.router, interviews.router, media.router, billing.router, ops.router):
+    for router in (admin.router, identity.router, jobs.router, interviews.router, media.router, billing.router, ops.router):
         app.include_router(router, prefix="/api/v1")
     return app
 

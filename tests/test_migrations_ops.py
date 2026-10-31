@@ -6,17 +6,20 @@ from sqlalchemy import inspect
 
 from alembic import command
 from app.core.config import Settings
+from app.db.models import Base
 from app.db.repository import Database
+from scripts.export_schema_sql import render_bootstrap_sql
 from tests.conftest import data, login
+from tests.test_admin import admin_login
 
 
-def test_migration_round_trip_and_postgres_sql(tmp_path):
+def test_migration_round_trip_and_mysql_sql(tmp_path):
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     url = f"sqlite:///{tmp_path}/migrate.db"
     config.attributes["database_url"] = url
     command.upgrade(config, "head")
-    db = Database(Settings(database_url=url))
-    assert len(inspect(db.engine).get_table_names()) == 18
+    db = Database(Settings(_env_file=None, database_url=url))
+    assert len(inspect(db.engine).get_table_names()) == len(Base.metadata.tables) + 1
     command.check(config)
     command.downgrade(config, "base")
     assert inspect(db.engine).get_table_names() == ["alembic_version"]
@@ -24,29 +27,52 @@ def test_migration_round_trip_and_postgres_sql(tmp_path):
     db.engine.dispose()
     output = io.StringIO()
     config.output_buffer = output
-    config.attributes["database_url"] = "postgresql+psycopg://test:test@localhost/test"
+    config.attributes["database_url"] = "mysql+pymysql://test:test@localhost/test?charset=utf8mb4"
     command.upgrade(config, "head", sql=True)
     sql = output.getvalue()
-    assert "JSONB" in sql
+    assert "JSONB" not in sql and "JSON NOT NULL" in sql
+    assert "DATETIME(6)" in sql and "LONGTEXT" in sql
+    assert sql.count("ENGINE=InnoDB") == len(Base.metadata.tables)
+    assert sql.count("COLLATE utf8mb4_0900_bin") == len(Base.metadata.tables)
+    assert "RETURNING" not in sql
     assert sql.count("ADD CONSTRAINT fk_interview_resume") == 1
     assert sql.count("ADD CONSTRAINT fk_turn_answer") == 1
+    exported = (Path(__file__).parents[1] / "docs/sql/ai_interview_mysql.sql").read_text(encoding="utf-8")
+    import re
+
+    def normalized(value):
+        value = re.sub(r"^\s*--[^\n]*", "", value, flags=re.M)
+        return re.sub(r"\s+", " ", value).strip()
+
+    # The bootstrap emits comments inline; Alembic retains historical migrations and adds comments at head.
+    assert normalized(exported) == normalized(render_bootstrap_sql())
+    assert (
+        len(re.findall(r"CREATE TABLE ", exported))
+        == len(re.findall(r"CREATE TABLE ", sql))
+        == len(Base.metadata.tables) + 1
+    )
+    output = io.StringIO()
+    config.output_buffer = output
+    command.downgrade(config, "head:base", sql=True)
+    assert output.getvalue().count("DROP TABLE ") == len(Base.metadata.tables) + 1
+    assert "DROP INDEX" not in output.getvalue()
 
 
 def test_admin_feedback_health_and_validation(client):
     headers, uid = login(client)
     assert client.get("/health/live").status_code == 200
     assert client.get("/health/ready").status_code == 200
-    assert client.get("/api/v1/admin/stats", headers=headers).status_code == 403
+    assert client.get("/api/v1/admin/stats", headers=headers).status_code == 401
     item = data(
         client.post(
             "/api/v1/feedback", headers=headers, json={"category": "REPORT", "content": "评分建议待核验"}
         )
     )
-    client.app.state.runtime.settings.admin_user_ids = uid
+    admin_headers, _ = admin_login(client)
     data(
         client.patch(
             "/api/v1/admin/feedback/" + item["id"],
-            headers=headers,
+            headers=admin_headers,
             json={"status": "RESOLVED", "reply": "已核查并补充说明"},
         )
     )
@@ -61,7 +87,7 @@ def test_admin_feedback_health_and_validation(client):
         "/api/v1/resumes",
         "/api/v1/job-profiles",
     ):
-        data(client.get(path, headers=headers))
+        data(client.get(path, headers=admin_headers if "/admin/" in path else headers))
     assert client.post("/api/v1/interviews", headers=headers, json={}).status_code == 422
     assert client.get("/api/v1/interviews?page_size=101", headers=headers).status_code == 422
     response = client.get("/not-found")

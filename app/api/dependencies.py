@@ -11,7 +11,7 @@ def db_session(request: Request):
     rt = request.app.state.runtime
     with rt.db.session() as session:
         yield session
-    if rt.settings.task_mode == "eager":
+    if rt.settings.task_mode == "eager" and not request.url.path.endswith("/submit-stream"):
         rt.drain()
 
 
@@ -39,14 +39,23 @@ def current_user(
     return user
 
 
-def admin_user(request: Request, user=Depends(current_user)):
-    require(
-        user.id in request.app.state.runtime.settings.admin_user_ids.split(","),
-        "AUTH_FORBIDDEN",
-        "需要管理员权限",
-        403,
+def admin_user(request: Request, db=Depends(db_session, scope="function"), authorization: str = Header("")):
+    from app.modules.admin.auth import AdminAuth
+    from app.modules.admin.security import permits
+
+    require(authorization.startswith("Bearer "), "ADMIN_UNAUTHORIZED", "请登录管理后台", 401)
+    admin, _ = AdminAuth(request.app.state.runtime, db, request).authenticate(authorization[7:])
+    permission = (
+        "user:update"
+        if "/feedback/" in request.url.path
+        else "ai:read"
+        if request.url.path.endswith("ai-calls")
+        else "audit:read"
+        if request.url.path.endswith("business-audit-logs")
+        else "dashboard:read"
     )
-    return user
+    require(permits(admin, permission), "ADMIN_FORBIDDEN", "无操作权限", 403)
+    return admin
 
 
 def service(cls, request, db, user):

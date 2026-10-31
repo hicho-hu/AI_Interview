@@ -1,4 +1,6 @@
 import contextvars
+import json
+import logging
 import time
 
 from pydantic import ValidationError
@@ -16,6 +18,7 @@ from app.providers.storage import LocalStorage, S3Storage
 
 call_buffer = contextvars.ContextVar("ai_call_buffer", default=None)
 checkpoint_buffer = contextvars.ContextVar("answer_checkpoints", default=None)
+logger = logging.getLogger(__name__)
 
 
 class Runtime:
@@ -74,7 +77,10 @@ class Runtime:
                 "单场 AI 成本预算已用完",
                 403,
             )
-        for attempt in range(self.settings.provider_retry_count + 1):
+        # Report jobs already have durable retries in the outbox. Nesting a full
+        # retry loop here can regenerate the same large report nine times.
+        retry_count = 0 if operation == "report" else self.settings.provider_retry_count
+        for attempt in range(retry_count + 1):
             require(
                 not self.cache.get("provider:cooldown"),
                 "AI_CIRCUIT_OPEN",
@@ -141,10 +147,32 @@ class Runtime:
                     buffer.append(log)
                 else:
                     session.add(log)
-            if (
-                error.code not in ("AI_OUTPUT_INVALID", "AI_PROVIDER_BUSY")
-                or attempt >= self.settings.provider_retry_count
-            ):
+            if error.code == "AI_OUTPUT_INVALID":
+                details = {
+                    "event": "ai_output_invalid",
+                    "operation": operation,
+                    "interview_id": interview_id,
+                    "request_id": request_id,
+                    "attempt": attempt + 1,
+                    "reason": error.message,
+                }
+                if isinstance(error.__cause__, ValidationError):
+                    # Only log schema-owned field names, never model input or
+                    # arbitrary extra keys that may contain private content.
+                    fields = set(schema.model_fields) if schema else set()
+                    details["validation_errors"] = [
+                        {
+                            "type": item["type"],
+                            "field": item["loc"][0]
+                            if item["loc"] and item["loc"][0] in fields
+                            else "unknown",
+                        }
+                        for item in error.__cause__.errors(
+                            include_input=False, include_context=False, include_url=False
+                        )
+                    ]
+                logger.warning(json.dumps(details, ensure_ascii=False))
+            if error.code not in ("AI_OUTPUT_INVALID", "AI_PROVIDER_BUSY") or attempt >= retry_count:
                 raise error
             backoff(attempt)
 

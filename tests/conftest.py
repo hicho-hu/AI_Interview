@@ -16,35 +16,43 @@ from app.main import create_app
 @pytest.fixture
 def client(tmp_path):
     database_url = f"sqlite:///{tmp_path}/test.db"
-    pg = os.environ.get("TEST_DATABASE_URL")
-    pg_engine, schema = None, None
-    if pg:
-        schema = "test_" + uuid.uuid4().hex
-        pg_engine = create_engine(pg)
-        with pg_engine.begin() as connection:
-            connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-        database_url = (
-            make_url(pg)
-            .update_query_dict({"options": f"-csearch_path={schema}"})
-            .render_as_string(hide_password=False)
-        )
+    mysql_url = os.environ.get("TEST_DATABASE_URL")
+    admin_engine, database_name = None, None
+    if mysql_url:
+        target = make_url(mysql_url)
+        if target.drivername != "mysql+pymysql":
+            raise ValueError("TEST_DATABASE_URL 必须使用 mysql+pymysql 驱动")
+        database_name = "ai_interview_test_" + uuid.uuid4().hex
+        admin_engine = create_engine(target, isolation_level="AUTOCOMMIT")
+        with admin_engine.connect() as connection:
+            connection.execute(
+                text(f"CREATE DATABASE `{database_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin")
+            )
+        database_url = target.set(database=database_name).render_as_string(hide_password=False)
     settings = Settings(
+        _env_file=None,
         environment="test",
         database_url=database_url,
         storage_path=tmp_path / "objects",
         rate_limit_per_minute=10000,
         provider_retry_count=0,
+        redis_url=None,
+        task_mode="eager",
     )
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
-    command.upgrade(config, "head")
-    app = create_app(settings)
-    with TestClient(app) as c:
-        yield c
-    if pg_engine:
-        with pg_engine.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        pg_engine.dispose()
+    try:
+        command.upgrade(config, "head")
+        app = create_app(settings)
+        with TestClient(app) as c:
+            yield c
+    finally:
+        if admin_engine:
+            # Only the fresh, randomly named database created by this fixture is removed.
+            assert database_name.startswith("ai_interview_test_") and len(database_name) == 50
+            with admin_engine.connect() as connection:
+                connection.execute(text(f"DROP DATABASE `{database_name}`"))
+            admin_engine.dispose()
 
 
 def data(response, status=None):

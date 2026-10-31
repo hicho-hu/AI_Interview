@@ -31,7 +31,9 @@ class UserPatch(DTO):
 
 
 class ConsentInput(DTO):
-    consent_type: Literal["PRIVACY", "TERMS", "AI_PROCESSING", "MICROPHONE", "CAMERA"]
+    consent_type: Literal[
+        "PRIVACY", "TERMS", "AI_PROCESSING", "MICROPHONE", "CAMERA", "SCREEN_CAPTURE", "SUPPORT_REVIEW"
+    ]
     policy_version: Text = Field(max_length=30)
 
 
@@ -62,11 +64,13 @@ class InterviewInput(DTO):
 class UploadInput(DTO):
     filename: Text = Field(max_length=200)
     content_type: Text = Field(max_length=120)
-    size: int = Field(ge=1, le=32 * 1024 * 1024)
-    media_type: Literal["AUDIO", "VIDEO", "RESUME", "JD_IMAGE"] = "AUDIO"
+    size: int = Field(ge=1, le=512 * 1024 * 1024)
+    media_type: Literal[
+        "AUDIO", "VIDEO", "RESUME", "JD_IMAGE", "SESSION_AUDIO", "SESSION_VIDEO", "SESSION_CAPTIONS"
+    ] = "AUDIO"
     interview_id: Optional[str] = None
     turn_id: Optional[str] = None
-    duration_ms: Optional[int] = Field(None, ge=1, le=180000)
+    duration_ms: Optional[int] = Field(None, ge=1, le=7200000)
 
 
 class UploadComplete(DTO):
@@ -79,6 +83,7 @@ class Answer(DTO):
     asset_id: Optional[str] = None
     asset_ids: Optional[list[str]] = Field(None, min_length=1, max_length=3)
     client_duration_ms: Optional[int] = Field(None, ge=1, le=180000)
+    live_transcript_id: Optional[str] = Field(None, max_length=36)
 
     @model_validator(mode="after")
     def one_source(self):
@@ -94,7 +99,7 @@ class Finish(DTO):
 
 
 class OrderInput(DTO):
-    product_code: Literal["SINGLE", "PACK_10", "MONTHLY"]
+    product_code: Text = Field(pattern=r"^[A-Z][A-Z0-9_]{1,39}$")
 
 
 class FeedbackInput(DTO):
@@ -185,4 +190,4 @@ class Transcript(DTO):
 
 class SynthesizedAudio(DTO):
     audio_base64: str = Field(max_length=14 * 1024 * 1024)
-    mime_type: Literal["audio/mpeg"]
+    mime_type: Literal["audio/mpeg", "audio/wav"]
