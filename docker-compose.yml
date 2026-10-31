@@ -1,0 +1,81 @@
+x-app: &app
+  build: .
+  environment: &environment
+    ENVIRONMENT: development
+    DATABASE_URL: postgresql+psycopg://interview:interview-local@postgres:5432/interview
+    REDIS_URL: redis://redis:6379/0
+    TASK_MODE: worker
+    STORAGE_BACKEND: s3
+    S3_ENDPOINT_URL: http://minio:9000
+    S3_PUBLIC_ENDPOINT_URL: http://localhost:9000
+    S3_ACCESS_KEY: local-interview
+    S3_SECRET_KEY: local-interview-secret
+    S3_BUCKET: ai-interview
+    PUBLIC_BASE_URL: http://localhost:8000
+    PROVIDER_MODE: mock
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+    bucket-init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: interview
+      POSTGRES_PASSWORD: interview-local
+      POSTGRES_DB: interview
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U interview"]
+      interval: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 20
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: local-interview
+      MINIO_ROOT_PASSWORD: local-interview-secret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["media-data:/data"]
+  bucket-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on: [minio]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        until mc alias set local http://minio:9000 local-interview local-interview-secret; do sleep 1; done;
+        mc mb --ignore-existing local/ai-interview;
+        mc anonymous set none local/ai-interview
+  migrate:
+    build: .
+    environment: *environment
+    command: alembic upgrade head
+    healthcheck: {disable: true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+  worker:
+    <<: *app
+    command: celery -A app.workers.celery_app:celery_app worker --loglevel=info --concurrency=2
+    healthcheck: {disable: true}
+  beat:
+    <<: *app
+    command: celery -A app.workers.celery_app:celery_app beat --loglevel=info --schedule=/srv/var/celerybeat
+    healthcheck: {disable: true}
+
+volumes:
+  postgres-data:
+  media-data:

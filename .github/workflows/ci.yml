@@ -1,0 +1,26 @@
+name: backend
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: interview
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: interview_test
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U interview" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: {version: '0.13.6', python-version: '3.12'}
+      - run: uv sync --frozen --extra dev
+      - run: uv run ruff check .
+      - run: uv run mypy
+      - run: uv run pytest --cov=app --cov-fail-under=80
+      - run: uv run pytest
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://interview:ci-only-password@localhost:5432/interview_test
+      - run: docker compose config --quiet
