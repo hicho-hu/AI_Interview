@@ -128,6 +128,8 @@ OCR、实时音视频/数字人、报告 PDF 导出、成长曲线是原文档�
 
 邮箱注册、邀请奖励与分佣推广已接入，配置和接口见 [邮箱账号与推广](docs/accounts-growth.md)。当前 Web 使用邮箱注册/密码登录；手机号与网页第三方登录暂缓。开发邮件默认预览验证码；生产暂不使用邮件时设置 `MAIL_MODE=disabled`，启用邮件时再配置 SMTP。
 
+生产临时测试注册可设置 `MAIL_MODE=disabled` 和 `REGISTRATION_EMAIL_MOCK_ENABLED=true`：页面展示本次随机验证码，正常创建真实账号，未验证邮箱归属。仅注册邮件受此开关影响；找回密码和换绑邮箱不会返回模拟验证码。Docker Compose 已透传该开关，修改环境配置后需重新创建 API 容器。恢复真实注册时关闭该开关并配置 SMTP，详见上述文档。
+
 ## 阿里云 OSS
 
 支持 `STORAGE_BACKEND=oss`，通过服务端 STS 按当前用户的单个待上传资产授权；Web 大文件分片上传，后端校验并复制到不可由上传凭证覆盖的 accepted 路径。角色策略、CORS、回放和切换步骤见 [OSS 接入](docs/oss-storage.md)。切换前可在保持本地存储时运行 `python -B scripts/check_oss.py --write-probe`，或在管理后台“系统管理 → 文件存储”检查连接。

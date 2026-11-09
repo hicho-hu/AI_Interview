@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     provider_cost_limit_microunits: int = Field(2_000_000, ge=1)
     global_daily_cost_limit_microunits: int = Field(100_000_000, ge=1)
     mail_mode: Literal["smtp", "preview", "disabled"] = "preview"
+    # 临时注册测试：只模拟注册邮件，响应直接返回本次验证码；不影响找回密码或换绑邮箱。
+    registration_email_mock_enabled: bool = False
     smtp_host: str = ""
     smtp_port: int = Field(587, ge=1, le=65535)
     smtp_username: str = ""

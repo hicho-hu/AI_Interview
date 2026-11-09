@@ -185,7 +185,12 @@ def test_password_reset_requires_email_proof_and_revokes_previous_sessions(clien
     )
 
 
-def test_smtp_delivery_returns_no_preview_code(client, monkeypatch):
+@pytest.mark.parametrize(
+    "purpose,mock_enabled",
+    [("REGISTER", False), ("RESET_PASSWORD", True), ("BIND_EMAIL", True)],
+)
+def test_smtp_delivery_returns_no_preview_code(client, monkeypatch, purpose, mock_enabled):
+    headers, _ = login(client) if purpose == "BIND_EMAIL" else ({}, None)
     messages = []
 
     class SMTP:
@@ -206,11 +211,14 @@ def test_smtp_delivery_returns_no_preview_code(client, monkeypatch):
 
     monkeypatch.setattr("app.providers.mail.smtplib.SMTP", SMTP)
     settings = client.app.state.runtime.settings
+    settings.environment = "production"
     settings.mail_mode = "smtp"
+    settings.registration_email_mock_enabled = mock_enabled
     settings.smtp_host = "smtp.example.com"
     settings.smtp_from = "noreply@example.com"
-    result = data(client.post("/api/v1/auth/email-code", json={"email": "recipient@example.com"}))
-    assert result["delivery"] == "smtp" and "development_code" not in result
+    result = email_code(client, "recipient@example.com", purpose, headers or None)
+    assert result["delivery"] == "smtp"
+    assert "development_code" not in result and "mock_code" not in result
     assert len(messages) == 1 and messages[0]["To"] == "recipient@example.com"
 
 
@@ -219,6 +227,73 @@ def test_production_refuses_preview_email_codes(client):
     response = client.post("/api/v1/auth/email-code", json={"email": "recipient@example.com"})
     assert response.status_code == 503
     assert "development_code" not in response.text
+
+
+def test_production_registration_mock_creates_real_account_without_smtp(client, monkeypatch):
+    settings = client.app.state.runtime.settings
+    settings.environment = "production"
+    settings.mail_mode = "disabled"
+    settings.registration_email_mock_enabled = True
+
+    def unexpected_delivery(*args, **kwargs):
+        pytest.fail("注册模拟模式不应连接 SMTP")
+
+    monkeypatch.setattr("app.providers.mail.smtplib.SMTP", unexpected_delivery)
+    monkeypatch.setattr("app.providers.mail.smtplib.SMTP_SSL", unexpected_delivery)
+    code = email_code(client, "mock-register@example.com")
+    assert code["delivery"] == "registration_mock"
+    assert len(code["mock_code"]) == 6 and code["mock_code"].isdigit()
+    assert "development_code" not in code
+    payload = {
+        "email": "mock-register@example.com",
+        "password": PASSWORD,
+        "code": code["mock_code"],
+        "challenge_id": code["challenge_id"],
+        "agreed": True,
+    }
+    wrong = "000000" if code["mock_code"] != "000000" else "111111"
+    invalid = client.post("/api/v1/auth/email-register", json={**payload, "code": wrong})
+    assert invalid.status_code == 400 and invalid.json()["code"] == "EMAIL_CODE_INVALID"
+    assert client.post(
+        "/api/v1/auth/email-register", json={**payload, "email": "other@example.com"}
+    ).status_code == 400
+    registered = data(client.post("/api/v1/auth/email-register", json=payload), 201)
+    signed = data(
+        client.post("/api/v1/auth/email-login", json={"email": payload["email"], "password": PASSWORD})
+    )
+    assert registered["user"]["id"] == signed["user"]["id"]
+    assert client.post("/api/v1/auth/email-register", json=payload).status_code == 409
+    with client.app.state.runtime.db.session() as db:
+        challenge = db.get(EmailChallenge, code["challenge_id"])
+        assert challenge.used_at is not None
+        assert challenge.code_hash != code["mock_code"]
+        assert db.scalar(select(UserAccount).where(UserAccount.user_id == registered["user"]["id"]))
+
+
+@pytest.mark.parametrize("purpose", ["RESET_PASSWORD", "BIND_EMAIL"])
+def test_registration_mock_does_not_expose_recovery_or_binding_codes(client, monkeypatch, purpose):
+    headers, _ = login(client) if purpose == "BIND_EMAIL" else ({}, None)
+    settings = client.app.state.runtime.settings
+    settings.environment = "production"
+    settings.mail_mode = "disabled"
+    settings.registration_email_mock_enabled = True
+
+    def unexpected_delivery(*args, **kwargs):
+        pytest.fail("禁用邮件时不应连接 SMTP")
+
+    monkeypatch.setattr("app.providers.mail.smtplib.SMTP", unexpected_delivery)
+    monkeypatch.setattr("app.providers.mail.smtplib.SMTP_SSL", unexpected_delivery)
+    path = "/api/v1/users/me/email-code" if headers else "/api/v1/auth/email-code"
+    response = client.post(
+        path,
+        headers=headers,
+        json={"email": "recipient@example.com", **({} if headers else {"purpose": purpose})},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "EMAIL_NOT_CONFIGURED"
+    assert "mock_code" not in response.text and "development_code" not in response.text
+    with client.app.state.runtime.db.session() as db:
+        assert db.scalar(select(EmailChallenge.id)) is None
 
 
 @pytest.mark.parametrize("purpose", ["REGISTER", "RESET_PASSWORD", "BIND_EMAIL"])

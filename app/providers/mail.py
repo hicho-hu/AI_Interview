@@ -1,4 +1,4 @@
-"""SMTP email verification with an explicitly labelled, non-production preview mode."""
+"""SMTP delivery, development previews, and opt-in registration-only test codes."""
 
 import smtplib
 import ssl
@@ -8,6 +8,8 @@ from app.core.errors import BusinessError, require
 
 
 def deliver_code(settings, email, code, purpose):
+    if purpose == "REGISTER" and settings.registration_email_mock_enabled:
+        return {"delivery": "registration_mock", "mock_code": code}
     require(settings.mail_mode != "disabled", "EMAIL_NOT_CONFIGURED", "邮件服务未配置", 503)
     if settings.mail_mode == "preview":
         require(

@@ -45,6 +45,20 @@ def test_production_rejects_preview_mail(production_config):
         Settings(_env_file=None, **production_config)
 
 
+def test_production_registration_mock_is_opt_in_and_needs_no_smtp(production_config):
+    production_config.update(mail_mode="disabled", smtp_host="", smtp_from="")
+    assert not Settings(_env_file=None, **production_config).registration_email_mock_enabled
+    production_config["registration_email_mock_enabled"] = True
+    settings = Settings(_env_file=None, **production_config)
+    assert settings.registration_email_mock_enabled
+    assert settings.environment == "production"
+
+
+def test_registration_mock_can_be_enabled_from_environment(production_config, monkeypatch):
+    monkeypatch.setenv("REGISTRATION_EMAIL_MOCK_ENABLED", "true")
+    assert Settings(_env_file=None, **production_config).registration_email_mock_enabled
+
+
 @pytest.mark.parametrize(
     "missing",
     [
