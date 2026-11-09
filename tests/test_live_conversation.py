@@ -216,3 +216,42 @@ def test_webvtt_is_validated_and_owned(client):
         asset = db.get(MediaAsset, ticket["asset_id"])
         rt.storage.put(asset.object_key, content, "text/vtt")
         assert svc.complete(asset.id, UploadComplete())["status"] == "READY"
+
+
+def test_live_decision_generates_only_the_next_question_and_keeps_raw_evidence(monkeypatch):
+    from app.providers.compatible import CompatibleProvider
+    from app.schemas.contracts import Decision
+    from tests.test_qwen_providers import qwen_settings
+
+    captured = []
+
+    def stream(body):
+        captured.append(body)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {"action": "FOLLOW_UP", "question": "如何验证优化结果？"}, ensure_ascii=False
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+        }
+
+    provider = CompatibleProvider(qwen_settings(), None)
+    monkeypatch.setattr(provider, "stream_chat", stream)
+    original = "我负责 React 组件开发、性能优化以及验证。"
+    token = live_sink.set(lambda _: None)
+    try:
+        output = provider.invoke("decision", {"answer": original}, Decision.model_json_schema())
+    finally:
+        live_sink.reset(token)
+    parsed = Decision.model_validate(output["data"])
+    assert parsed.answer_summary == original
+    assert parsed.question == "如何验证优化结果？"
+    schema_text = (
+        captured[0]["messages"][0]["content"].split("输出 JSON Schema：")[1].split("\n这是实时语音面试")[0]
+    )
+    assert set(json.loads(schema_text)["properties"]) == {"action", "question"}

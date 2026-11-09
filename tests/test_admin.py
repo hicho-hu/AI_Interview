@@ -167,7 +167,7 @@ def test_price_snapshots_and_refund_ledger(client):
         assert len(rows) == 1
 
 
-def test_media_review_consent_scope_expiry_and_no_url_cache(client):
+def test_media_review_skips_user_consent_but_keeps_role_scope_expiry_and_no_url_cache(client):
     user, uid = login(client)
     row = interview(client, user)
     root, _ = admin_login(client)
@@ -191,14 +191,8 @@ def test_media_review_consent_scope_expiry_and_no_url_cache(client):
         mid = asset.id
     path = f"/api/v1/admin/media/{mid}/playback-grant"
     assert client.post(path, headers=root, json={"reason": "短"}).status_code == 422
-    assert client.post(path, headers=root, json={"reason": "用户授权支持排障"}).status_code == 403
-    data(
-        client.post(
-            "/api/v1/users/me/consents",
-            headers=user,
-            json={"consent_type": "SUPPORT_REVIEW", "policy_version": "1.0"},
-        )
-    )
+    result = data(client.post(path, headers=root, json={"reason": "管理员直接审阅面试记录"}))
+    assert result["expires_in"] <= 120 and "signature=" in result["url"]
     assert client.post(path, headers=quality, json={"reason": "用户授权支持排障"}).status_code == 403
     data(
         client.post(
@@ -207,20 +201,20 @@ def test_media_review_consent_scope_expiry_and_no_url_cache(client):
             json={"interview_id": row["id"], "assignee_id": qid, "reason": "用户授权支持排障"},
         )
     )
-    result = data(client.post(path, headers=quality, json={"reason": "用户授权支持排障"}))
+    result = data(client.post(path, headers=quality, json={"reason": "分派质检任务并直接审阅"}))
     assert result["expires_in"] <= 120 and "signature=" in result["url"]
     content = data(
         client.post(
             f"/api/v1/admin/interviews/{row['id']}/review",
             headers=quality,
-            json={"reason": "查看授权面试时间轴"},
+            json={"reason": "查看面试时间轴"},
         )
     )
     assert "turns" in content
     with rt.db.session() as db:
         db.get(MediaAsset, mid).expires_at = utcnow() - timedelta(seconds=1)
         assert all("signature=" not in r.reason for r in db.scalars(select(AdminAudit)))
-    assert client.post(path, headers=quality, json={"reason": "用户授权支持排障"}).status_code == 410
+    assert client.post(path, headers=quality, json={"reason": "回放已过期录制"}).status_code == 410
 
 
 def test_mfa_and_disabled_session(client):
@@ -405,6 +399,12 @@ def test_refund_failure_does_not_create_pending_requests(client):
         assert db.get(Order, order["id"]).status == "PAID"
         db.get(Order, order["id"]).provider_trade_no = "dev:" + order["id"]
         db.get(User, uid).credits = 0
+        from app.db.entitlement_models import CreditBalance
+
+        balance = db.scalar(
+            select(CreditBalance).where(CreditBalance.user_id == uid, CreditBalance.mode == "TEXT")
+        )
+        balance.remaining = 0
     assert client.post("/api/v1/admin/refunds", headers=finance, json=payload).status_code == 409
     with rt.db.session() as db:
         assert db.scalar(select(RefundRequest.id)) is None

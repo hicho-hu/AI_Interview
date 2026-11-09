@@ -38,9 +38,16 @@ class Security:
     def identity_hash(self, identity: str):
         return hmac.new(self.settings.secret_key.encode(), identity.encode(), hashlib.sha256).hexdigest()
 
-    def token(self, user_id: str):
+    def token(self, user_id: str, auth_version: int = 0):
         expires = utcnow() + timedelta(minutes=self.settings.access_token_minutes)
-        claims = {"sub": user_id, "jti": new_id(), "exp": expires, "iat": utcnow(), "aud": "ai-interview"}
+        claims = {
+            "sub": user_id,
+            "jti": new_id(),
+            "exp": expires,
+            "iat": utcnow(),
+            "aud": "ai-interview",
+            "ver": auth_version,
+        }
         return jwt.encode(claims, self.settings.secret_key, algorithm="HS256")
 
     def decode(self, token: str):

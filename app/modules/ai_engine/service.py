@@ -121,6 +121,8 @@ class EngineService(Service):
                 asset_id = new_id()
                 extension = "wav" if output["mime_type"] == "audio/wav" else "mp3"
                 key = f"{self.rt.settings.environment}/users/{self.uid}/tts/{asset_id}.{extension}"
+                if self.rt.settings.storage_backend == "oss":
+                    key = f"ai-interview/user/{self.uid}/generated/{asset_id}.{extension}"
                 self.rt.storage.put(key, audio, output["mime_type"])
                 asset = MediaAsset(
                     id=asset_id,

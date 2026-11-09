@@ -1,6 +1,8 @@
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select, update
 
 from app.core.security import new_id, utcnow
+from app.db.entitlement_models import CreditBalance
+from app.db.growth_models import EmailChallenge, UserAccount
 from app.db.models import (
     Consent,
     Feedback,
@@ -85,6 +87,18 @@ class PrivacyService(Service):
             task.payload_encrypted, task.result_encrypted = None, None
             if task.status in ("PENDING", "RUNNING", "RETRYING", "QUEUED"):
                 task.status = "CANCELLED"
+        self.db.execute(update(CreditBalance).where(CreditBalance.user_id == self.uid).values(remaining=0))
+        account = self.db.scalar(select(UserAccount).where(UserAccount.user_id == self.uid))
+        if account:
+            conditions = [EmailChallenge.user_id == self.uid]
+            if account.email_hash:
+                conditions.append(EmailChallenge.email_hash == account.email_hash)
+            self.db.execute(delete(EmailChallenge).where(or_(*conditions)))
+            account.email_hash = None
+            account.email_encrypted = account.phone_encrypted = account.password_hash = (
+                account.avatar_asset_id
+            ) = None
+            account.auth_version += 1
         user = self.db.get(User, self.uid)
         user.nickname, user.openid_hash, user.status, user.credits = "[已删除]", new_id(), "DELETED", 0
         self.audit("USER_DATA_DELETED", user.id)

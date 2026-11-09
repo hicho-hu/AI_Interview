@@ -6,12 +6,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
     environment: Literal["development", "test", "production"] = "development"
     database_url: str = "mysql+pymysql://interview:interview-local@127.0.0.1:3306/interview?charset=utf8mb4"
     redis_url: Optional[str] = "redis://127.0.0.1:6379/0"
     task_mode: Literal["eager", "worker"] = "worker"
-    storage_backend: Literal["local", "s3"] = "local"
+    storage_backend: Literal["local", "s3", "oss"] = "local"
     storage_path: Path = Path("var/objects")
     public_base_url: str = "http://localhost:8000"
     secret_key: str = "development-only-change-this-secret-32-chars"
@@ -45,8 +45,25 @@ class Settings(BaseSettings):
     provider_retry_count: int = Field(2, ge=0, le=3)
     provider_cost_limit_microunits: int = Field(2_000_000, ge=1)
     global_daily_cost_limit_microunits: int = Field(100_000_000, ge=1)
+    mail_mode: Literal["smtp", "preview", "disabled"] = "preview"
+    smtp_host: str = ""
+    smtp_port: int = Field(587, ge=1, le=65535)
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_ssl: bool = False
+    smtp_starttls: bool = True
+    web_base_url: str = "http://127.0.0.1:5173"
     wechat_app_id: str = ""
     wechat_app_secret: str = ""
+    aliyun_access_key_id: str = Field("", repr=False)
+    aliyun_access_key_secret: str = Field("", repr=False)
+    aliyun_ram_role_arn: str = ""
+    oss_bucket_name: str = "ai-interview-storage"
+    oss_endpoint: str = "https://oss-cn-hangzhou.aliyuncs.com"
+    oss_region: str = "cn-hangzhou"
+    oss_sts_endpoint: str = "sts.cn-hangzhou.aliyuncs.com"
+    oss_sts_duration_seconds: int = Field(3600, ge=900, le=3600)
     s3_endpoint_url: Optional[str] = None
     s3_public_endpoint_url: Optional[str] = None
     s3_bucket: str = "ai-interview"
@@ -65,6 +82,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def production_guards(self):
+        if self.storage_backend == "oss" and not (
+            self.aliyun_access_key_id
+            and self.aliyun_access_key_secret
+            and self.aliyun_ram_role_arn.startswith("acs:ram::")
+            and ":role/" in self.aliyun_ram_role_arn
+            and self.oss_bucket_name
+            and self.oss_endpoint.startswith("https://")
+            and self.oss_sts_endpoint.endswith(".aliyuncs.com")
+        ):
+            raise ValueError("OSS 必须配置后端 RAM 密钥、角色 ARN、Bucket 和 HTTPS Endpoint")
         if self.realtime_asr_url and not self.realtime_asr_url.startswith("wss://"):
             raise ValueError("实时转写必须使用 WSS 地址")
         if self.asr_provider == "qwen" and (
@@ -85,17 +112,22 @@ class Settings(BaseSettings):
             required = (
                 self.database_url.startswith("mysql+pymysql://"),
                 self.redis_url,
-                self.storage_backend == "s3",
+                self.storage_backend in ("s3", "oss"),
                 self.task_mode == "worker",
                 self.provider_mode in ("http", "compatible"),
                 self.provider_url.startswith("https://"),
                 self.provider_api_key,
                 self.encryption_key,
                 len(self.secret_key) >= 32 and not self.secret_key.startswith("development"),
-                self.wechat_app_id,
-                self.wechat_app_secret,
+                self.mail_mode == "smtp",
+                self.smtp_host,
+                self.smtp_from,
+                self.smtp_use_ssl or self.smtp_starttls,
+                self.web_base_url.startswith("https://"),
                 self.public_base_url.startswith("https://"),
             )
             if not all(required):
-                raise ValueError("生产环境必须配置 MySQL/Redis/S3/Worker/真实 Provider/微信/HTTPS/独立密钥")
+                raise ValueError(
+                    "生产环境必须配置 MySQL/Redis/私有对象存储/Worker/真实 Provider/SMTP/HTTPS/独立密钥"
+                )
         return self

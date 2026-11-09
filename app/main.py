@@ -13,7 +13,8 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException
 
-from app.api import admin, billing, identity, interviews, jobs, media, ops
+from app.api import accounts, admin, billing, growth, identity, interviews, jobs, media, ops
+from app.api.v1 import storage as cloud_storage
 from app.core.errors import BusinessError
 from app.core.security import new_id
 from app.runtime import Runtime
@@ -130,14 +131,27 @@ def create_app(settings=None, runtime=None):
                 connection.execute(text("SELECT version_num FROM alembic_version"))
             if rt.cache.redis:
                 rt.cache.redis.ping()
+            if rt.settings.storage_backend == "oss":
+                rt.storage.check_ready()
             if rt.settings.storage_backend == "s3":
                 rt.storage.client.head_bucket(Bucket=rt.settings.s3_bucket)
         except Exception:
             return error(request, 503, "DEPENDENCY_UNAVAILABLE", "数据库迁移/Redis/对象存储未就绪")
         return {"status": "ready"}
 
-    for router in (admin.router, identity.router, jobs.router, interviews.router, media.router, billing.router, ops.router):
+    for router in (
+        admin.router,
+        accounts.router,
+        growth.router,
+        identity.router,
+        jobs.router,
+        interviews.router,
+        media.router,
+        billing.router,
+        ops.router,
+    ):
         app.include_router(router, prefix="/api/v1")
+    app.include_router(cloud_storage.router, prefix="/api/v1")
     return app
 
 

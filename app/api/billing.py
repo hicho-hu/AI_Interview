@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import func, select
 
@@ -12,10 +14,36 @@ router = APIRouter(prefix="/billing", tags=["权益与订单"])
 
 def catalog(db):
     from app.db.admin_models import Product
-    rows = db.scalars(select(Product).where(Product.status == "PUBLISHED")).all()
-    configured = {r.code: {"code": r.code, "name": r.name, "amount_minor": r.amount_minor,
-                          "credits": r.credits, "currency": r.currency, "version": r.version} for r in rows}
-    return list(configured.values()) + [{"code": k, **v, "currency": "CNY"} for k, v in PRODUCTS.items() if k not in configured]
+
+    rows = db.scalars(
+        select(Product)
+        .where(Product.status == "PUBLISHED")
+        .order_by(Product.version.desc(), Product.code)
+    ).all()
+    configured = {
+        r.code: {
+            "code": r.code,
+            "kind": r.kind,
+            "name": r.name,
+            "amount_minor": r.amount_minor,
+            "credits": r.credits,
+            "interview_credits": r.interview_credits,
+            "currency": r.currency,
+            "version": r.version,
+        }
+        for r in rows
+    }
+    if configured:
+        return list(configured.values())
+    return [
+        {
+            "code": k,
+            **v,
+            "kind": "SINGLE" if k == "SINGLE" else "PACK",
+            "currency": "CNY",
+        }
+        for k, v in PRODUCTS.items()
+    ]
 
 
 @router.get("/products", response_model=Envelope)
@@ -32,10 +60,7 @@ def products(request: Request, db=Depends(db_session, scope="function"), user=De
 
 @router.get("/entitlements", response_model=Envelope)
 def entitlements(request: Request, db=Depends(db_session, scope="function"), user=Depends(current_user)):
-    reserved = db.scalar(
-        select(func.count()).select_from(Usage).where(Usage.user_id == user.id, Usage.status == "RESERVED")
-    )
-    return ok(request, {"remaining_interviews": user.credits, "reserved_interviews": reserved})
+    return ok(request, service(BillingService, request, db, user).entitlements(user))
 
 
 @router.get("/usage", response_model=Envelope)
@@ -43,11 +68,18 @@ def usage(
     request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    usage_type: list[Literal["INVITER_REWARD", "INVITEE_REWARD"]] = Query(default=[]),
     db=Depends(db_session, scope="function"),
     user=Depends(current_user),
 ):
+    statement = select(Usage).where(Usage.user_id == user.id)
+    if usage_type:
+        statement = statement.where(Usage.usage_type.in_(usage_type))
     rows, total = page_query(
-        db, select(Usage).where(Usage.user_id == user.id).order_by(Usage.created_at.desc()), page, page_size
+        db,
+        statement.order_by(Usage.created_at.desc()),
+        page,
+        page_size,
     )
     cost = db.scalar(
         select(func.coalesce(func.sum(AICallLog.cost_microunits), 0)).where(AICallLog.user_id == user.id)
@@ -61,6 +93,7 @@ def usage(
                     "interview_id": r.interview_id,
                     "usage_type": r.usage_type,
                     "quantity": r.quantity,
+                    "credit_allocations": service(BillingService, request, db, user).allocations(r),
                     "status": r.status,
                     "amount_minor": r.amount_minor,
                     "created_at": str(r.created_at),
@@ -100,7 +133,7 @@ def orders(
     return ok(
         request,
         {
-            "items": [BillingService.order_view(r) for r in rows],
+            "items": [service(BillingService, request, db, user).order_view(r) for r in rows],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -112,7 +145,9 @@ def orders(
 def order(
     order_id: str, request: Request, db=Depends(db_session, scope="function"), user=Depends(current_user)
 ):
-    return ok(request, BillingService.order_view(owned(db, Order, order_id, user.id)))
+    return ok(
+        request, service(BillingService, request, db, user).order_view(owned(db, Order, order_id, user.id))
+    )
 
 
 @router.post("/orders/{order_id}/dev-pay", response_model=Envelope)

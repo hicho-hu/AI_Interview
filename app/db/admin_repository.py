@@ -2,6 +2,7 @@ from sqlalchemy import func, or_, select
 
 from app.db.models import Interview, JobProfile, Order, User
 from app.db.repository import page_query
+from app.modules.billing.service import credit_balances
 
 
 def fields(row, names):
@@ -67,6 +68,7 @@ def user_list(db, query, status, page, page_size):
             {
                 **fields(r, "id status credits created_at"),
                 "nickname": mask(r.nickname),
+                **credit_balances(db, r),
                 "interview_count": interviews.get(r.id, 0),
                 "paid_minor": payments.get(r.id, 0),
             }

@@ -20,6 +20,9 @@ class InterviewService(Service):
     def create(self, data, key):
         def create_once():
             IdentityService(self.rt, self.db, self.uid).require_consents("PRIVACY", "TERMS", "AI_PROCESSING")
+            # Lock the owner before inserting FK children, so concurrent MySQL
+            # reservations cannot deadlock while upgrading shared user locks.
+            BillingService(self.rt, self.db, self.uid).lock_user()
             job = owned(self.db, JobProfile, data.job_profile_id, self.uid)
             require(job.status == "READY", "JOB_NOT_READY", "岗位解析未完成", 409)
             if data.resume_asset_id:

@@ -1,5 +1,5 @@
 -- AI 模拟面试服务：MySQL 8.4 全新建库 SQL（含中文表注释和全部字段注释）
--- 当前结构对应 Alembic 版本 a61d8c4e9201，包含 29 张业务表和 1 张迁移版本表。
+-- 当前结构对应 Alembic 版本 e913c5ab7d20，包含 40 张业务表和 1 张迁移版本表。
 -- 仅在空数据库中执行；已有数据库请使用 alembic upgrade head；不要直接执行本建库 SQL。
 -- 不包含业务数据或凭证；ID、状态及时间等 ORM 客户端默认值由应用写入。
 -- 示例：mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u root AI_Interview < docs/sql/ai_interview_mysql.sql
@@ -150,6 +150,20 @@ CREATE TABLE audit_logs (
 
 CREATE INDEX ix_audit_logs_user_id ON audit_logs (user_id);
 
+CREATE TABLE email_challenges (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    user_id VARCHAR(36) COMMENT '绑定邮箱的操作用户 ID；注册或找回密码时为空',
+    email_hash VARCHAR(64) NOT NULL COMMENT '验证码目标邮箱 HMAC',
+    purpose VARCHAR(24) NOT NULL COMMENT '用途：REGISTER/RESET_PASSWORD/BIND_EMAIL',
+    code_hash VARCHAR(64) NOT NULL COMMENT '验证码 HMAC，不保存或记录明文验证码',
+    expires_at DATETIME(6) NOT NULL COMMENT '验证码过期时间（UTC）',
+    used_at DATETIME(6) COMMENT '成功消费时间（UTC）；空表示未使用',
+    PRIMARY KEY (id),
+    FOREIGN KEY(user_id) REFERENCES users (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='邮箱验证码挑战，限定用途、收件人、有效期和一次性消费' COLLATE utf8mb4_0900_bin;
+
 CREATE TABLE idempotency_records (
     user_id VARCHAR(36) NOT NULL COMMENT '所属用户 ID，关联 users.id，用于数据归属校验',
     scope VARCHAR(200) NOT NULL COMMENT '幂等操作范围，区分创建面试、提交回答、结束、订单等操作',
@@ -163,6 +177,46 @@ CREATE TABLE idempotency_records (
     UNIQUE (user_id, scope, `key`),
     FOREIGN KEY(user_id) REFERENCES users (id)
 )ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='关键写操作的幂等键、请求摘要及原始响应快照' COLLATE utf8mb4_0900_bin;
+
+CREATE TABLE interview_credit_balances (
+    id VARCHAR(36) NOT NULL COMMENT '分类权益余额记录 ID（UUID）',
+    user_id VARCHAR(36) NOT NULL COMMENT '权益所属用户 ID，关联 users.id',
+    mode VARCHAR(16) NOT NULL COMMENT '面试类型：TEXT=文字、VOICE=语音、VIDEO=视频',
+    remaining INTEGER NOT NULL COMMENT '该类型可用次数，单位次；不含已预占次数和历史通用次数' DEFAULT '0',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    PRIMARY KEY (id),
+    CONSTRAINT uq_credit_balance_user_mode UNIQUE (user_id, mode),
+    CONSTRAINT ck_credit_balance_nonnegative CHECK (remaining >= 0),
+    FOREIGN KEY(user_id) REFERENCES users (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='按文字、语音、视频分别管理可用面试次数；旧通用次数继续存储于 users.credits' COLLATE utf8mb4_0900_bin;
+
+CREATE TABLE invitation_codes (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    user_id VARCHAR(36) NOT NULL COMMENT '邀请人用户 ID',
+    code VARCHAR(24) NOT NULL COMMENT '公开邀请码，大小写规范化',
+    PRIMARY KEY (id),
+    UNIQUE (user_id),
+    FOREIGN KEY(user_id) REFERENCES users (id),
+    UNIQUE (code)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='每个用户唯一的邀请码；注册归因后不可重绑邀请人' COLLATE utf8mb4_0900_bin;
+
+CREATE TABLE invitation_configs (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    version INTEGER NOT NULL COMMENT '配置版本号，递增且唯一',
+    enabled BOOL NOT NULL COMMENT '是否启用邀请奖励',
+    threshold INTEGER NOT NULL COMMENT '邀请人每累计多少名有效新注册用户获得一次奖励，单位人',
+    inviter_rewards JSON NOT NULL COMMENT '邀请人每达门槛发放的 TEXT/VOICE/VIDEO 次数组合',
+    invitee_rewards JSON NOT NULL COMMENT '受邀人成功注册额外发放的 TEXT/VOICE/VIDEO 次数组合',
+    created_by VARCHAR(36) NOT NULL COMMENT '发布配置的管理员 ID',
+    PRIMARY KEY (id),
+    UNIQUE (version),
+    FOREIGN KEY(created_by) REFERENCES admin_users (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='邀请活动配置版本；新版本仅影响之后验证邮箱并注册的用户' COLLATE utf8mb4_0900_bin;
 
 CREATE TABLE job_profiles (
     user_id VARCHAR(36) NOT NULL COMMENT '所属用户 ID，关联 users.id，用于数据归属校验',
@@ -242,12 +296,29 @@ CREATE TABLE product_skus (
     status VARCHAR(24) NOT NULL COMMENT '状态：DRAFT/IN_REVIEW/PUBLISHED/RETIRED',
     created_by VARCHAR(36) NOT NULL COMMENT '创建管理员 ID',
     published_at DATETIME(6) COMMENT '发布时间（UTC）',
+    interview_credits JSON COMMENT '按面试类型发放的次数：TEXT=文字、VOICE=语音、VIDEO=视频；NULL=历史通用次数套餐',
     PRIMARY KEY (id),
     CONSTRAINT uq_product_sku_version UNIQUE (code, version),
     FOREIGN KEY(created_by) REFERENCES admin_users (id)
 )ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='按 SKU 和版本保存商品配置，已发布版本只影响新订单' COLLATE utf8mb4_0900_bin;
 
 CREATE INDEX ix_product_skus_created_at ON product_skus (created_at);
+
+CREATE TABLE promotion_links (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    code VARCHAR(24) NOT NULL COMMENT '公开推广码，唯一',
+    name VARCHAR(100) NOT NULL COMMENT '推广活动名称',
+    promoter_name VARCHAR(100) NOT NULL COMMENT '推广合作方或推广人名称',
+    alipay_account_encrypted LONGTEXT COMMENT '线下打款用支付宝账号（加密存储）',
+    rate_bps INTEGER NOT NULL COMMENT '佣金比例，单位基点；100表示百分之一，范围0至10000',
+    status VARCHAR(16) NOT NULL COMMENT '链接状态：ACTIVE=可用于新注册，DISABLED=停止新注册归因',
+    created_by VARCHAR(36) NOT NULL COMMENT '创建推广链接的管理员 ID',
+    PRIMARY KEY (id),
+    UNIQUE (code),
+    FOREIGN KEY(created_by) REFERENCES admin_users (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='管理后台创建的分佣推广链接及佣金配置' COLLATE utf8mb4_0900_bin;
 
 CREATE TABLE reconciliation_batches (
     id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
@@ -264,6 +335,24 @@ CREATE TABLE reconciliation_batches (
 )ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='导入渠道账单后与业务订单核对，不伪造渠道拉单' COLLATE utf8mb4_0900_bin;
 
 CREATE INDEX ix_reconciliation_batches_created_at ON reconciliation_batches (created_at);
+
+CREATE TABLE referral_registrations (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    invitee_id VARCHAR(36) NOT NULL COMMENT '验证邮箱并成功注册的受邀用户 ID',
+    inviter_id VARCHAR(36) NOT NULL COMMENT '邀请人用户 ID',
+    config_version INTEGER NOT NULL COMMENT '注册时邀请规则版本，0表示系统默认版本',
+    threshold INTEGER NOT NULL COMMENT '注册时门槛快照，单位人',
+    inviter_rewards JSON NOT NULL COMMENT '注册时邀请人奖励次数组合快照',
+    invitee_rewards JSON NOT NULL COMMENT '注册时受邀人奖励次数组合快照',
+    PRIMARY KEY (id),
+    UNIQUE (invitee_id),
+    FOREIGN KEY(invitee_id) REFERENCES users (id),
+    FOREIGN KEY(inviter_id) REFERENCES users (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='有效邀请注册记录；一名新用户仅归因一次，规则取注册时配置快照' COLLATE utf8mb4_0900_bin;
+
+CREATE INDEX ix_referral_inviter_version ON referral_registrations (inviter_id, config_version);
 
 CREATE TABLE user_consents (
     user_id VARCHAR(36) NOT NULL COMMENT '所属用户 ID，关联 users.id，用于数据归属校验',
@@ -322,6 +411,35 @@ CREATE TABLE order_product_snapshots (
 )ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='订单创建时固化的商品价格和权益快照，发布新价不改历史订单' COLLATE utf8mb4_0900_bin;
 
 CREATE INDEX ix_order_product_snapshots_created_at ON order_product_snapshots (created_at);
+
+CREATE TABLE promotion_attributions (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    user_id VARCHAR(36) NOT NULL COMMENT '被推广注册的用户 ID',
+    link_id VARCHAR(36) NOT NULL COMMENT '推广链接 ID',
+    PRIMARY KEY (id),
+    UNIQUE (user_id),
+    FOREIGN KEY(user_id) REFERENCES users (id),
+    FOREIGN KEY(link_id) REFERENCES promotion_links (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='新注册用户的推广归因，账号唯一且不能在购买时改写' COLLATE utf8mb4_0900_bin;
+
+CREATE TABLE promotion_commissions (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    order_id VARCHAR(36) NOT NULL COMMENT '产生佣金的订单 ID',
+    link_id VARCHAR(36) NOT NULL COMMENT '归属推广链接 ID',
+    rate_bps INTEGER NOT NULL COMMENT '订单创建时固化的佣金比例（基点）',
+    amount_minor INTEGER NOT NULL COMMENT '佣金金额（人民币分），按订单实付乘比例向下取整',
+    status VARCHAR(16) NOT NULL COMMENT '应计状态：ACCRUED=已计提，REVERSED=退款已冲销，SETTLED=已线下打款',
+    reversed_at DATETIME(6) COMMENT '退款冲销时间（UTC）',
+    settled_at DATETIME(6) COMMENT '线下打款结算时间（UTC）',
+    PRIMARY KEY (id),
+    UNIQUE (order_id),
+    FOREIGN KEY(order_id) REFERENCES orders (id),
+    FOREIGN KEY(link_id) REFERENCES promotion_links (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='订单分佣应计台账；订单唯一，退款冲销，不执行真实转账' COLLATE utf8mb4_0900_bin;
 
 CREATE TABLE reconciliation_items (
     id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
@@ -528,6 +646,20 @@ CREATE INDEX ix_ai_call_logs_interview_id ON ai_call_logs (interview_id);
 
 CREATE INDEX ix_ai_call_logs_user_id ON ai_call_logs (user_id);
 
+CREATE TABLE invitation_rewards (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    inviter_id VARCHAR(36) NOT NULL COMMENT '获得奖励的邀请人 ID',
+    config_version INTEGER NOT NULL COMMENT '活动配置版本',
+    milestone INTEGER NOT NULL COMMENT '已达到的第几个门槛，从 1 递增',
+    usage_id VARCHAR(36) NOT NULL COMMENT '实际奖励权益流水 ID',
+    PRIMARY KEY (id),
+    CONSTRAINT uq_invitation_reward_milestone UNIQUE (inviter_id, config_version, milestone),
+    FOREIGN KEY(inviter_id) REFERENCES users (id),
+    FOREIGN KEY(usage_id) REFERENCES usage_ledger (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='邀请人每个配置版本的里程碑奖励，唯一键防止重复发放' COLLATE utf8mb4_0900_bin;
+
 CREATE TABLE resume_assets (
     user_id VARCHAR(36) NOT NULL COMMENT '所属用户 ID，关联 users.id，用于数据归属校验',
     asset_id VARCHAR(36) NOT NULL COMMENT '简历原始文件资产 ID，关联 media_assets.id，一份文件对应一份解析记录',
@@ -546,6 +678,37 @@ CREATE TABLE resume_assets (
 
 CREATE INDEX ix_resume_assets_user_id ON resume_assets (user_id);
 
+CREATE TABLE usage_credit_allocations (
+    id VARCHAR(36) NOT NULL COMMENT '权益流水分类明细 ID（UUID）',
+    usage_id VARCHAR(36) NOT NULL COMMENT '权益流水 ID，关联 usage_ledger.id',
+    mode VARCHAR(16) NOT NULL COMMENT '次数来源：TEXT/VOICE/VIDEO=对应类型；UNIVERSAL=历史通用次数',
+    quantity INTEGER NOT NULL COMMENT '该类型次数变化，单位次；发放为正、预占或退款为负；释放按原来源返还',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    PRIMARY KEY (id),
+    CONSTRAINT uq_usage_credit_mode UNIQUE (usage_id, mode),
+    FOREIGN KEY(usage_id) REFERENCES usage_ledger (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='权益流水的类型分配明细，保证取消、重试及退款使用原始类型；历史无明细流水视为通用次数' COLLATE utf8mb4_0900_bin;
+
+CREATE TABLE user_accounts (
+    id VARCHAR(36) NOT NULL COMMENT '记录唯一标识（UUID）',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间（UTC）',
+    updated_at DATETIME(6) NOT NULL COMMENT '最后变更时间（UTC）',
+    user_id VARCHAR(36) NOT NULL COMMENT '用户 ID，关联 users.id',
+    email_hash VARCHAR(64) COMMENT '规范化邮箱的 HMAC，唯一查找键；不保存明文邮箱',
+    email_encrypted LONGTEXT COMMENT '加密的已验证邮箱地址',
+    password_hash VARCHAR(256) COMMENT 'scrypt 密码散列，含随机盐；不保存明文密码',
+    auth_version INTEGER NOT NULL COMMENT '用户会话版本；改密和换绑后递增，使旧令牌失效' DEFAULT '0',
+    avatar_asset_id VARCHAR(36) COMMENT '已验证的头像媒体资产 ID',
+    system_avatar_key VARCHAR(16) COMMENT '用户选择的系统头像目录标识',
+    phone_encrypted LONGTEXT COMMENT '可选联系手机号（加密）；仅联系信息，未认证且不用于登录',
+    PRIMARY KEY (id),
+    UNIQUE (user_id),
+    FOREIGN KEY(user_id) REFERENCES users (id),
+    UNIQUE (email_hash),
+    FOREIGN KEY(avatar_asset_id) REFERENCES media_assets (id)
+)ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='用户邮箱账号、安全凭证与资料扩展；关联既有业务用户' COLLATE utf8mb4_0900_bin;
+
 ALTER TABLE interviews ADD CONSTRAINT fk_interview_resume FOREIGN KEY(resume_asset_id) REFERENCES resume_assets (id);
 
 ALTER TABLE media_assets ADD CONSTRAINT fk_media_turn FOREIGN KEY(turn_id) REFERENCES interview_turns (id);
@@ -554,4 +717,4 @@ ALTER TABLE interview_turns ADD CONSTRAINT fk_turn_answer FOREIGN KEY(answer_ass
 
 ALTER TABLE interview_turns ADD CONSTRAINT fk_turn_tts FOREIGN KEY(question_asset_id) REFERENCES media_assets (id);
 
-INSERT INTO alembic_version (version_num) VALUES ('a61d8c4e9201');
+INSERT INTO alembic_version (version_num) VALUES ('e913c5ab7d20');

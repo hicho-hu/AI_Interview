@@ -236,8 +236,18 @@ class Feedback(Entity, Base):
 
 
 attach_schema_documentation(Base.metadata)
-Base.metadata.tables["users"].c.status.comment = "账号状态：ACTIVE=正常，FROZEN=冻结，DELETING=删除中，DELETED=已删除"
-Base.metadata.tables["user_consents"].c.consent_type.comment = "授权类型：PRIVACY/TERMS/AI_PROCESSING/MICROPHONE/CAMERA/SCREEN_CAPTURE；SUPPORT_REVIEW=后台人工审阅授权"
+Base.metadata.tables[
+    "users"
+].c.status.comment = "账号状态：ACTIVE=正常，FROZEN=冻结，DELETING=删除中，DELETED=已删除"
+Base.metadata.tables[
+    "user_consents"
+].c.consent_type.comment = (
+    "授权类型：PRIVACY/TERMS/AI_PROCESSING/MICROPHONE/CAMERA/SCREEN_CAPTURE；SUPPORT_REVIEW=后台人工审阅授权"
+)
 
 # Register the new schema after the historical business COMMENT snapshot was applied.
-from app.db import admin_models  # noqa: E402, F401
+from app.db import (  # noqa: E402, F401
+    admin_models,
+    entitlement_models,
+    growth_models,
+)

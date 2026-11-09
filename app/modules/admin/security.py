@@ -19,6 +19,8 @@ PERMISSIONS = {
         "quality:assign",
         "product:read",
         "product:write",
+        "growth:read",
+        "growth:write",
         "ai:read",
     },
     "SUPPORT": {
@@ -42,6 +44,8 @@ PERMISSIONS = {
         "order:refund",
         "product:read",
         "product:write",
+        "growth:read",
+        "growth:write",
         "payment:read",
         "payment:write",
         "reconciliation:write",

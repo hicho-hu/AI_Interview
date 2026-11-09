@@ -27,6 +27,8 @@ from app.modules.admin.service import (
     QUALITY_FIELDS,
     AdminService,
 )
+from app.modules.billing.service import BillingService
+from app.modules.media.storage_status import storage_status
 from app.schemas import admin as schema
 from app.schemas.contracts import Envelope
 
@@ -58,6 +60,11 @@ def access(permission):
 
 def svc(request: Request, db=Depends(db_session, scope="function"), admin=Depends(current_admin)):
     return AdminService(request.app.state.runtime, db, admin, request)
+
+
+@router.get("/storage/status", response_model=Envelope, dependencies=[Depends(access("system:read"))])
+def storage_configuration(request: Request, probe: bool = False):
+    return ok(request, storage_status(request.app.state.runtime, probe))
 
 
 def sensitive_review(service, resource_id, operation):
@@ -290,7 +297,17 @@ def orders(
     if status:
         conditions.append(Order.status == status)
     return ok(
-        request, listing(service.db, Order, lambda r: fields(r, ORDER_FIELDS), **p, conditions=conditions)
+        request,
+        listing(
+            service.db,
+            Order,
+            lambda r: {
+                **fields(r, ORDER_FIELDS),
+                "interview_credits": BillingService(service.rt, service.db, r.user_id).order_credits(r),
+            },
+            **p,
+            conditions=conditions,
+        ),
     )
 
 
@@ -332,6 +349,21 @@ def product(
     )
 
 
+@router.put("/products/{pid}", response_model=Envelope, dependencies=[Depends(access("product:write"))])
+def update_product(
+    request: Request, pid: str, data: schema.ProductUpdate, idempotency_key: str = Header(...), service=Depends(svc)
+):
+    return ok(
+        request,
+        service.idem(
+            "product:update:" + pid,
+            idempotency_key,
+            data.model_dump(),
+            lambda: service.update_product(pid, data),
+        ),
+    )
+
+
 @router.post(
     "/products/{pid}/publish", response_model=Envelope, dependencies=[Depends(access("product:write"))]
 )
@@ -345,6 +377,23 @@ def publish(
             idempotency_key,
             data.model_dump(),
             lambda: service.publish(pid, data.reason),
+        ),
+    )
+
+
+@router.post(
+    "/products/{pid}/offline", response_model=Envelope, dependencies=[Depends(access("product:write"))]
+)
+def offline_product(
+    request: Request, pid: str, data: schema.Reason, idempotency_key: str = Header(...), service=Depends(svc)
+):
+    return ok(
+        request,
+        service.idem(
+            "product:offline:" + pid,
+            idempotency_key,
+            data.model_dump(),
+            lambda: service.offline(pid, data.reason),
         ),
     )
 

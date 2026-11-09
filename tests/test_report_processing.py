@@ -71,6 +71,83 @@ def test_report_without_answers_cannot_invent_evidence():
         resolve_report_evidence({"reviews": [], "dimensions": [{"evidence": ["invented"]}]}, catalog)
 
 
+@pytest.mark.parametrize("scores", [[72, 65, 58, 60, 55, 70], [72, None, None, None, None, 70]])
+def test_report_preserves_supported_scores_and_partial_assessment(client, scores):
+    headers, _ = login(client)
+    row = interview(client, headers, config={"question_count": 1})
+    path = "/api/v1/interviews/" + row["id"]
+    data(client.post(path + "/start", headers=headers))
+
+    class ScoredReport(MockProvider):
+        def invoke(self, operation, payload, schema):
+            result = super().invoke(operation, payload, schema)
+            if operation == "report":
+                report = result["data"]
+                for dimension, score in zip(report["dimensions"], scores):
+                    if score is not None:
+                        dimension.update(
+                            score=score,
+                            feedback="已说明具体行动，但量化结果与技术权衡仍需补充。",
+                            evidence=[payload["turns"][0]["answer"]],
+                        )
+                report["overall_score"] = 0  # Model arithmetic must not discard supported dimension scores.
+            return result
+
+    client.app.state.runtime.provider = ScoredReport()
+    answer = "我用执行计划定位慢查询，再建立复合索引；量化结果还没整理完。"
+    data(
+        client.post(
+            path + "/turns/" + row["current_question"]["id"] + "/submit",
+            headers={**headers, "Idempotency-Key": "answer"},
+            json={"text": answer},
+        )
+    )
+    for version in (1, 2):
+        if version == 2:
+            data(client.post(path + "/report/regenerate", headers={**headers, "Idempotency-Key": "regen"}))
+        result = data(client.get(path + "/report", headers=headers))
+        assert result["status"] == "COMPLETED"
+        report = result["report"]
+        assert report["version"] == version
+        assert [dimension["score"] for dimension in report["dimensions"]] == scores
+        assessed = [score for score in scores if score is not None]
+        assert report["overall_score"] == round(sum(assessed) / len(assessed), 1)
+        for dimension in report["dimensions"]:
+            assert dimension["evidence"] == ([answer] if dimension["score"] is not None else [])
+    assert data(client.get(path + "/report?version=1", headers=headers))["report"]["version"] == 1
+
+
+def test_report_rejects_unassessed_dimensions_with_assessment_evidence(client):
+    headers, _ = login(client)
+    row = interview(client, headers, config={"question_count": 1})
+    path = "/api/v1/interviews/" + row["id"]
+    data(client.post(path + "/start", headers=headers))
+
+    class ContradictoryReport(MockProvider):
+        def invoke(self, operation, payload, schema):
+            result = super().invoke(operation, payload, schema)
+            if operation == "report":
+                for dimension in result["data"]["dimensions"]:
+                    dimension["evidence"] = [payload["turns"][0]["answer"]]
+                    dimension["feedback"] = "无法判断：已介绍具体行动，但案例未讲完。"
+            return result
+
+    client.app.state.runtime.provider = ContradictoryReport()
+    data(
+        client.post(
+            path + "/turns/" + row["current_question"]["id"] + "/submit",
+            headers={**headers, "Idempotency-Key": "answer"},
+            json={"text": "我先识别重复下发和消息丢失风险，再验证幂等、对账和失败重试。"},
+        )
+    )
+    result = data(client.get(path + "/report", headers=headers))
+    exhaust(client.app.state.runtime, result["task_id"])
+    result = data(client.get(path + "/report", headers=headers))
+    assert result["status"] == "REPORT_FAILED"
+    assert result["failure_code"] == "AI_OUTPUT_INVALID"
+    assert result["report"] is None
+
+
 def test_report_retries_once_per_task_attempt_and_exposes_failure(client):
     headers, _ = login(client)
     other, _ = login(client, "another-owner")

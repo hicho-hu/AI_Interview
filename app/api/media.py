@@ -78,7 +78,7 @@ def delete_media(
 def signed_asset(request, db, asset_id, purpose, expires, signature):
     rt = request.app.state.runtime
     require(
-        rt.settings.storage_backend == "local" and rt.settings.environment != "production",
+        rt.settings.storage_backend in ("local", "oss") and rt.settings.environment != "production",
         "RESOURCE_NOT_FOUND",
         "不存在",
         404,
@@ -92,6 +92,12 @@ def signed_asset(request, db, asset_id, purpose, expires, signature):
     )
     asset = db.get(MediaAsset, asset_id)
     require(asset and aware(asset.expires_at) > utcnow(), "MEDIA_EXPIRED", "媒体不存在或已过期", 410)
+    require(
+        not (rt.settings.storage_backend == "oss" and asset.object_key.startswith("ai-interview/user/")),
+        "RESOURCE_NOT_FOUND",
+        "不存在",
+        404,
+    )
     return rt, asset
 
 
@@ -122,7 +128,8 @@ async def local_put(
         content.extend(part)
         require(len(content) <= asset.size_bytes, "MEDIA_TOO_LARGE", "上传数据超过声明大小", 413)
     require(len(content) == asset.size_bytes, "MEDIA_SIZE_MISMATCH", "上传数据大小不一致")
-    rt.storage.put(asset.object_key, bytes(content), asset.mime_type)
+    target = getattr(rt.storage, "legacy", rt.storage)
+    target.put(asset.object_key, bytes(content), asset.mime_type)
     return ok(request, {"uploaded": True})
 
 

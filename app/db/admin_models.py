@@ -3,12 +3,14 @@
 from sqlalchemy.orm import registry
 
 from app.db.admin_schema_v1 import define_tables
+from app.db.entitlement_schema_v1 import product_credits_column
 
 mapper_registry = registry()
 
 
 def register(metadata):
     names = define_tables(metadata)
+    metadata.tables["product_skus"].append_column(product_credits_column())
     mapping = {
         "AdminUser": "admin_users",
         "AdminSession": "admin_sessions",

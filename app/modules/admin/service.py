@@ -22,12 +22,11 @@ from app.db.admin_repository import fields, interview_list, listing, mask
 from app.db.models import AICallLog, Consent, Interview, JobProfile, MediaAsset, Order, Report, Usage, User
 from app.modules.admin.auth import AdminAuth, create_admin
 from app.modules.admin.security import permits
-from app.modules.billing.service import BillingService
-from app.modules.identity.service import IdentityService
+from app.modules.billing.service import BillingService, credit_balances
 from app.modules.interview.service import InterviewService
 from app.modules.shared import Service, dump
 
-PRODUCT_FIELDS = "id code version name kind amount_minor original_minor credits validity_days currency description status published_at created_at"
+PRODUCT_FIELDS = "id code version name kind amount_minor original_minor credits interview_credits validity_days currency description status published_at created_at"
 ORDER_FIELDS = "id user_id product_code amount_minor credits currency status paid_at refunded_at provider_trade_no created_at"
 QUALITY_FIELDS = "id interview_id assignee_id created_by reason status tags conclusion created_at"
 
@@ -83,13 +82,17 @@ class AdminService(Service):
         consents = self.db.scalars(select(Consent).where(Consent.user_id == uid)).all()
         return {
             **fields(row, "id status credits created_at"),
+            **credit_balances(self.db, row),
             "nickname": mask(row.nickname),
             "consents": [fields(c, "id consent_type policy_version revoked_at created_at") for c in consents],
             "interviews": interview_list(self.db, "", None, None, 1, 10, uid),
             "usage": listing(
                 self.db,
                 Usage,
-                lambda r: fields(r, "id usage_type quantity amount_minor status created_at"),
+                lambda r: {
+                    **fields(r, "id usage_type quantity amount_minor status created_at"),
+                    "credit_allocations": BillingService(self.rt, self.db, uid).allocations(r),
+                },
                 conditions=(Usage.user_id == uid,),
             ),
         }
@@ -102,31 +105,23 @@ class AdminService(Service):
         return {"id": uid, "status": row.status}
 
     def grant(self, uid, data):
-        result = self.db.execute(
-            update(User)
-            .where(User.id == uid, User.status == "ACTIVE")
-            .values(credits=User.credits + data.quantity)
+        billing = BillingService(self.rt, self.db, uid)
+        user = billing.lock_user()
+        require(user and user.status == "ACTIVE", "USER_INVALID_STATE", "仅能给正常账号补发权益", 409)
+        billing.change_balance(data.mode, data.quantity)
+        entry = billing.ledger(
+            "ADMIN_GRANT", {data.mode: data.quantity}, "GRANTED", "admin-grant:" + new_id()
         )
-        require(result.rowcount == 1, "USER_INVALID_STATE", "仅能给正常账号补发权益", 409)
-        entry = Usage(
-            user_id=uid,
-            usage_type="ADMIN_GRANT",
-            quantity=data.quantity,
-            status="GRANTED",
-            idempotency_key="admin-grant:" + new_id(),
-        )
-        self.db.add(entry)
-        self.db.flush()
         self.audit("ENTITLEMENT_GRANTED", uid, data.reason)
         if data.ticket:
             self.audit("ENTITLEMENT_TICKET", entry.id, data.ticket)
-        user = self.get(User, uid)
         self.db.refresh(user)
         return {
             "id": entry.id,
             "user_id": uid,
             "quantity": data.quantity,
-            "remaining_interviews": user.credits,
+            "mode": data.mode,
+            **credit_balances(self.db, user),
             "status": entry.status,
         }
 
@@ -180,7 +175,6 @@ class AdminService(Service):
                 )
             )
             require(assigned, "REVIEW_SCOPE_DENIED", "该面试未分派给您或任务已关闭", 403)
-        IdentityService(self.rt, self.db, row.user_id).require_consents("SUPPORT_REVIEW")
         require(
             row.created_at + timedelta(days=self.rt.settings.media_retention_days) > utcnow(),
             "REVIEW_EXPIRED",
@@ -236,6 +230,8 @@ class AdminService(Service):
                 Params={"Bucket": self.rt.settings.s3_bucket, "Key": asset.object_key},
                 ExpiresIn=seconds,
             )
+        elif self.rt.settings.storage_backend == "oss" and self.rt.storage.cloud_key(asset.object_key):
+            url = self.rt.storage.url(asset, seconds=seconds)
         else:
             expires = int(utcnow().timestamp()) + seconds
             signature = self.rt.security.sign_object(asset.id, "download", expires)
@@ -275,6 +271,16 @@ class AdminService(Service):
         self.audit("PRODUCT_DRAFT_CREATED", row.id, data.reason)
         return fields(row, PRODUCT_FIELDS)
 
+    def update_product(self, pid, data):
+        row = self.get(Product, pid)
+        require(row.status in ("DRAFT", "IN_REVIEW"), "PRODUCT_INVALID_STATE", "仅未上线商品可直接编辑", 409)
+        require(data.code == row.code, "PRODUCT_CODE_IMMUTABLE", "商品 SKU 不可修改", 409)
+        payload = data.model_dump(exclude={"reason", "code"})
+        for name, value in payload.items():
+            setattr(row, name, value)
+        self.audit("PRODUCT_DRAFT_UPDATED", row.id, data.reason)
+        return fields(row, PRODUCT_FIELDS)
+
     def publish(self, pid, reason):
         row = self.get(Product, pid)
         # Lock a SKU's versions in the same order, so concurrent publishes cannot
@@ -294,6 +300,13 @@ class AdminService(Service):
                 product.status = "RETIRED"
         row.status, row.published_at = "PUBLISHED", utcnow()
         self.audit("PRODUCT_PUBLISHED", row.id, reason)
+        return fields(row, PRODUCT_FIELDS)
+
+    def offline(self, pid, reason):
+        row = self.get(Product, pid)
+        require(row.status == "PUBLISHED", "PRODUCT_INVALID_STATE", "仅已上线商品可下线", 409)
+        row.status = "RETIRED"
+        self.audit("PRODUCT_OFFLINED", row.id, reason)
         return fields(row, PRODUCT_FIELDS)
 
     def payment(self, channel, data):

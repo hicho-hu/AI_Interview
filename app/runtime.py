@@ -12,6 +12,7 @@ from app.core.errors import BusinessError, require
 from app.core.security import Security, utcnow
 from app.db.models import AICallLog
 from app.db.repository import Database
+from app.infrastructure.storage.oss_storage import OSSStorage
 from app.providers.ai import HTTPProvider, MockProvider, backoff
 from app.providers.compatible import CompatibleProvider
 from app.providers.storage import LocalStorage, S3Storage
@@ -27,8 +28,12 @@ class Runtime:
         self.security = Security(self.settings)
         self.db = Database(self.settings)
         self.cache = Cache(self.settings)
-        self.storage = (S3Storage if self.settings.storage_backend == "s3" else LocalStorage)(
-            self.settings, self.security
+        self.storage = (
+            OSSStorage(self.settings, self.security, self.cache)
+            if self.settings.storage_backend == "oss"
+            else (S3Storage if self.settings.storage_backend == "s3" else LocalStorage)(
+                self.settings, self.security
+            )
         )
         self.provider = (
             MockProvider()

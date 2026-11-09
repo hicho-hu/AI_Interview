@@ -6,7 +6,7 @@ from sqlalchemy import and_, or_, select, update
 from app.core.errors import BusinessError, require
 from app.core.security import new_id, utcnow
 from app.core.state import transition
-from app.db.models import Interview, JobProfile, MediaAsset, ResumeAsset, Task, Turn, Usage, User
+from app.db.models import Interview, JobProfile, MediaAsset, ResumeAsset, Task, Turn, User
 from app.modules.ai_engine.service import EngineService
 from app.modules.billing.service import BillingService
 from app.modules.job_profile.service import JobService, ResumeService
@@ -165,12 +165,7 @@ def retry_task(rt, db, task, user_id):
     if task.event_type == "PREPARE_INTERVIEW":
         row = db.get(Interview, task.aggregate_id)
         require(not row.deleted_at and row.status == "FAILED", "INTERVIEW_INVALID_STATE", "面试不可重试", 409)
-        ledger = db.scalar(select(Usage).where(Usage.idempotency_key == f"interview:{row.id}"))
-        result = db.execute(
-            update(User).where(User.id == user_id, User.credits > 0).values(credits=User.credits - 1)
-        )
-        require(result.rowcount, "INTERVIEW_QUOTA_NOT_ENOUGH", "重试需要面试额度", 403)
-        ledger.status = "RESERVED"
+        BillingService(rt, db, user_id).reserve(row.id, retry=True)
         transition(row, "PREPARING")
     elif task.event_type == "GENERATE_REPORT":
         row = db.get(Interview, task.aggregate_id)

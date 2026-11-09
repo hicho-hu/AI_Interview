@@ -30,6 +30,7 @@ MIMES = {
         "audio/webm": {".webm"},
     },
     "VIDEO": {"video/mp4": {".mp4"}, "video/webm": {".webm"}},
+    "AVATAR": {"image/png": {".png"}, "image/jpeg": {".jpg", ".jpeg"}},
     "JD_IMAGE": {"image/png": {".png"}, "image/jpeg": {".jpg", ".jpeg"}},
 }
 
@@ -70,6 +71,35 @@ def inspect_media(data, mime, kind, *, ffprobe_bin="ffprobe"):
     else:
         valid = data.startswith(b"\xff\xd8\xff")
     require(valid, "MEDIA_INVALID_FORMAT", "文件头与声明类型不符", 415)
+    if kind == "AVATAR":
+        require(len(data) <= 2 * 1024 * 1024, "MEDIA_TOO_LARGE", "头像最大 2 MB", 400)
+        try:
+            with tempfile.NamedTemporaryFile() as temp:
+                temp.write(data)
+                temp.flush()
+                result = subprocess.run(
+                    [ffprobe_bin, "-v", "error", "-show_streams", "-of", "json", temp.name],
+                    capture_output=True,
+                    timeout=10,
+                    check=True,
+                )
+                streams = json.loads(result.stdout).get("streams", [])
+            require(
+                len(streams) == 1
+                and streams[0].get("codec_name") in ("png", "mjpeg")
+                and 0 < streams[0].get("width", 0) <= 2048
+                and 0 < streams[0].get("height", 0) <= 2048,
+                "MEDIA_INVALID_FORMAT",
+                "头像须为不超过 2048×2048 的 PNG 或 JPEG",
+                415,
+            )
+        except OSError as exc:
+            raise BusinessError(
+                "MEDIA_PROCESSOR_UNAVAILABLE", "头像处理服务暂不可用，请联系管理员", 503
+            ) from exc
+        except (subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
+            raise BusinessError("MEDIA_INVALID_FORMAT", "无法解码头像图片", 415) from exc
+        return None
     if kind not in ("AUDIO", "VIDEO", "SESSION_AUDIO", "SESSION_VIDEO"):
         return None
     if mime in ("audio/wav", "audio/x-wav"):
@@ -142,10 +172,12 @@ class MediaService(Service):
     def upload(self, data, resume=False):
         kind = "RESUME" if resume else data.media_type
         IdentityService(self.rt, self.db, self.uid).require_consents("PRIVACY", "TERMS")
+        if kind == "AVATAR":
+            require(data.size <= 2 * 1024 * 1024, "MEDIA_TOO_LARGE", "头像最大 2 MB")
         session_recording = kind in ("SESSION_AUDIO", "SESSION_VIDEO", "SESSION_CAPTIONS")
         if session_recording:
             IdentityService(self.rt, self.db, self.uid).require_consents(
-                "MICROPHONE", *(["CAMERA", "SCREEN_CAPTURE"] if kind == "SESSION_VIDEO" else [])
+                "MICROPHONE", *(["CAMERA"] if kind == "SESSION_VIDEO" else [])
             )
             require(
                 data.interview_id and data.duration_ms,
@@ -220,18 +252,27 @@ class MediaService(Service):
             mime_type=data.content_type,
             size_bytes=data.size,
             duration_ms=data.duration_ms,
-            object_key=f"{self.rt.settings.environment}/users/{self.uid}/{kind.lower()}/{asset_id}{ext}",
+            object_key=(
+                f"ai-interview/user/{self.uid}/incoming/{asset_id}{ext}"
+                if self.rt.settings.storage_backend == "oss"
+                else f"{self.rt.settings.environment}/users/{self.uid}/{kind.lower()}/{asset_id}{ext}"
+            ),
             expires_at=utcnow() + timedelta(days=self.rt.settings.media_retention_days),
         )
         self.db.add(row)
         self.db.flush()
+        cloud = self.rt.settings.storage_backend == "oss"
         result = {
             "asset_id": row.id,
-            "upload_url": self.rt.storage.url(row, "upload"),
-            "method": "PUT",
+            "upload_url": f"/api/v1/storage/sts-token?asset_id={row.id}"
+            if cloud
+            else self.rt.storage.url(row, "upload"),
+            "method": "OSS_STS" if cloud else "PUT",
             "headers": {"Content-Type": row.mime_type},
             "expires_in": self.rt.settings.upload_url_seconds,
         }
+        if cloud:
+            result.update(storage_backend="oss", object_key=row.object_key)
         if kind == "RESUME":
             parsed = ResumeAsset(user_id=self.uid, asset_id=row.id)
             self.db.add(parsed)
@@ -255,7 +296,9 @@ class MediaService(Service):
             415,
         )
         require(not data.etag or data.etag.strip('"') == head["etag"], "MEDIA_ETAG_MISMATCH", "ETag 不一致")
-        content = self.rt.storage.read(row.object_key)
+        reader = getattr(self.rt.storage, "read_version", None)
+        content = reader(row.object_key, head["etag"]) if reader else self.rt.storage.read(row.object_key)
+        require(len(content) == row.size_bytes, "MEDIA_SIZE_MISMATCH", "上传文件内容大小发生变化")
         digest = hashlib.sha256(content).hexdigest()
         require(
             not data.checksum or data.checksum.lower() == digest, "MEDIA_CHECKSUM_MISMATCH", "SHA256 不一致"

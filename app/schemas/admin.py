@@ -36,6 +36,13 @@ class UserStatus(Reason):
 class EntitlementGrant(Reason):
     quantity: int = Field(ge=1, le=1000)
     ticket: str = Field("", max_length=100)
+    mode: Literal["TEXT", "VOICE", "VIDEO", "UNIVERSAL"] = "UNIVERSAL"
+
+
+class ModeCredits(DTO):
+    TEXT: int = Field(0, ge=0, le=10000)
+    VOICE: int = Field(0, ge=0, le=10000)
+    VIDEO: int = Field(0, ge=0, le=10000)
 
 
 class ProductInput(Reason):
@@ -44,15 +51,29 @@ class ProductInput(Reason):
     kind: Literal["SINGLE", "MONTH", "QUARTER", "YEAR", "PACK"]
     amount_minor: int = Field(ge=1, le=100000000)
     original_minor: int = Field(ge=1, le=100000000)
-    credits: int = Field(ge=1, le=10000)
+    credits: Optional[int] = Field(None, ge=1, le=10000)
+    interview_credits: Optional[ModeCredits] = None
     validity_days: int = Field(ge=1, le=3650)
     description: str = Field("", max_length=500)
 
     @model_validator(mode="after")
     def prices(self):
+        if self.interview_credits is not None:
+            total = sum(self.interview_credits.model_dump().values())
+            if not 1 <= total <= 10000:
+                raise ValueError("套餐分类次数合计必须为 1 至 10000 次")
+            if self.credits is not None and self.credits != total:
+                raise ValueError("套餐总次数必须等于各面试类型次数之和")
+            self.credits = total
+        elif self.credits is None:
+            raise ValueError("请设置面试类型次数")
         if self.original_minor < self.amount_minor:
             raise ValueError("原价不能小于售价")
         return self
+
+
+class ProductUpdate(ProductInput):
+    """Edits an unpublished product draft without changing its SKU or version."""
 
 
 class PaymentInput(Reason):

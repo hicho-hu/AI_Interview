@@ -59,8 +59,10 @@ def test_production_database_guard_accepts_mysql_and_rejects_postgres():
         provider_api_key="test-only-key",
         encryption_key=Fernet.generate_key().decode(),
         secret_key="test-production-guard-secret-32-characters",
-        wechat_app_id="test-app-id",
-        wechat_app_secret="test-app-secret",
+        mail_mode="smtp",
+        smtp_host="smtp.example.test",
+        smtp_from="noreply@example.test",
+        web_base_url="https://web.example.test",
         public_base_url="https://app.example.test",
     )
     assert Settings(_env_file=None, **values).database_url.startswith("mysql+pymysql://")

@@ -55,16 +55,18 @@ class ReportService(Service):
                         "缺少证据时必须标记无法判断",
                         502,
                     )
+                else:
+                    require(
+                        dimension["score"] is not None,
+                        "AI_OUTPUT_INVALID",
+                        "已有维度评价证据时须对本次表现评分，不完整或薄弱应在分数和反馈中体现",
+                        502,
+                    )
             scores = [d["score"] for d in data["dimensions"] if d["score"] is not None]
             expected = round(sum(scores) / len(scores), 1) if scores else None
-            require(
-                data["overall_score"] is None
-                if expected is None
-                else data["overall_score"] is not None and abs(data["overall_score"] - expected) <= 1,
-                "AI_OUTPUT_INVALID",
-                "综合得分须为有效维度的平均分",
-                502,
-            )
+            # Arithmetic is deterministic; derive the total from validated dimensions
+            # rather than rejecting otherwise valid feedback for a model math error.
+            data["overall_score"] = expected
 
         segments, current, size = [], [], 0
         for turn in usable:

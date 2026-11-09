@@ -58,8 +58,11 @@ class IdentityService(Service):
                 )
             )
         require(user.status == "ACTIVE", "AUTH_ACCOUNT_DISABLED", "账号不可用", 403)
+        from app.modules.accounts.service import AccountService
+
+        account = AccountService(self.rt, self.db, user.id).account()
         return {
-            "access_token": self.rt.security.token(user.id),
+            "access_token": self.rt.security.token(user.id, account.auth_version if account else 0),
             "token_type": "bearer",
             "expires_in": self.rt.settings.access_token_minutes * 60,
             "user": self.view(user),
@@ -73,6 +76,15 @@ class IdentityService(Service):
             not revoked and user is not None and user.status in ("ACTIVE", "DELETING"),
             "AUTH_UNAUTHORIZED",
             "登录状态已失效",
+            401,
+        )
+        from app.modules.accounts.service import AccountService
+
+        account = AccountService(self.rt, self.db, user.id).account()
+        require(
+            not account or claims.get("ver", 0) == account.auth_version,
+            "AUTH_UNAUTHORIZED",
+            "账号安全信息已更新，请重新登录",
             401,
         )
         self.uid = user.id
@@ -92,11 +104,33 @@ class IdentityService(Service):
         return {"logged_out": True}
 
     def view(self, user):
+        from app.modules.accounts.service import AccountService
+        from app.modules.billing.service import credit_balances
+
+        account = AccountService(self.rt, self.db, user.id).account()
+        avatar_url = None
+        if account and account.avatar_asset_id:
+            from app.db.models import MediaAsset
+            from app.modules.media.service import MediaService
+
+            asset = self.db.get(MediaAsset, account.avatar_asset_id)
+            if asset and asset.status == "READY" and not asset.deleted_at:
+                avatar_url = MediaService(self.rt, self.db, user.id).view(asset)["download_url"]
         return {
             "id": user.id,
+            "email": self.rt.security.decrypt(account.email_encrypted)
+            if account and account.email_encrypted
+            else None,
+            "has_password": bool(account and account.password_hash),
+            "avatar_url": avatar_url,
+            "system_avatar_key": account.system_avatar_key if account else None,
+            "contact_phone": self.rt.security.decrypt(account.phone_encrypted)
+            if account and account.phone_encrypted
+            else None,
+            "phone_verified": False,
             "nickname": user.nickname,
             "status": user.status,
-            "remaining_interviews": user.credits,
+            **credit_balances(self.db, user),
             "created_at": str(user.created_at),
         }
 

@@ -66,7 +66,7 @@ class UploadInput(DTO):
     content_type: Text = Field(max_length=120)
     size: int = Field(ge=1, le=512 * 1024 * 1024)
     media_type: Literal[
-        "AUDIO", "VIDEO", "RESUME", "JD_IMAGE", "SESSION_AUDIO", "SESSION_VIDEO", "SESSION_CAPTIONS"
+        "AUDIO", "VIDEO", "RESUME", "JD_IMAGE", "AVATAR", "SESSION_AUDIO", "SESSION_VIDEO", "SESSION_CAPTIONS"
     ] = "AUDIO"
     interview_id: Optional[str] = None
     turn_id: Optional[str] = None

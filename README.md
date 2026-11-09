@@ -6,6 +6,8 @@
 
 ## 启动
 
+本地 dev/prod 配置分别保存在 `.env.dev` 和 `.env.prod`，选定后复制为 `.env`；两份文件包含凭证，不提交 Git。环境差异、生产待填项及切换方法见 [环境配置](docs/environments.md)。
+
 当前本机环境可以一条命令启动（读取 `.env`，后台运行 API、Celery Worker 和 Beat）：
 
 ```bash
@@ -55,11 +57,15 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 3306 -u root AI_Interview 
 若自行修改过字段定义，可使用 `python -m scripts.export_schema_sql --kind comments --live-schema` 只读生成适合当前结构的 SQL。生成文件不代表已执行更新；本次未对现有业务库直接应用注释。
 此次切换不删除或自动搬运旧 PostgreSQL/SQLite 数据；已有业务数据需另行执行数据迁移。旧 SQLite 文件仍保留在 var/ 中。
 
+## 首次启动基础数据
+
+建表后运行 `.venv/bin/python -m scripts.export_initial_data_sql`，生成可导入的 `var/bootstrap/init_ai_interview_mysql.sql` 和仅本地保存的管理员凭证。初始化包含超级管理员、4 个默认权益套餐、邀请奖励配置及审计，重复导入保留已有配置。角色权限由代码内置，无需额外角色表。生成、RDS 导入及 MFA 说明见 [首次启动基础数据](docs/initial-data.md)，共享模板为 [init_ai_interview_mysql.sql](docs/sql/init_ai_interview_mysql.sql)。
+
 ## 已实现的功能
 
 |业务域|能力|
 |---|---|
-|用户|微信 code 换码、JWT、退出撤销、用户资料、版本化授权与撤销、个人数据查询/异步删除|
+|用户|邮箱验证码注册、邮箱密码登录、改密与邮箱换绑、头像昵称、JWT 会话撤销、版本化授权与撤销、个人数据查询/异步删除|
 |岗位/简历|JD 录入/结构化、级别、岗位管理；PDF/DOCX 私有上传/文字提取/结构化，计划结合简历事实|
 |面试|TEXT/VOICE/VIDEO；15/30/45 分钟、难度/语言/题数/类型；计划、首题、暂停/恢复/取消、超时/题数结束|
 |动态问答|独立引擎；FOLLOW_UP/NEXT_QUESTION/CLARIFY/FINISH；追问/澄清上限、能力覆盖、最近轮次摘要|
@@ -117,3 +123,11 @@ OCR、实时音视频/数字人、报告 PDF 导出、成长曲线是原文档�
 ## 运营管理后台
 
 新增独立管理员登录、RBAC、单人直接操作、审计、运营指标、用户与面试审阅、商品版本、财务对账等接口。启动、迁移与当前边界见 [后台运行说明](docs/admin-console.md)。
+
+分类面试权益的套餐配置、类型余额、历史通用次数兼容和迁移说明见 [分类面试权益](docs/typed-entitlements.md)。
+
+邮箱注册、邀请奖励与分佣推广已接入，配置和接口见 [邮箱账号与推广](docs/accounts-growth.md)。当前 Web 使用邮箱注册/密码登录；手机号与网页第三方登录暂缓。开发邮件默认预览验证码，正式部署需配置 SMTP。
+
+## 阿里云 OSS
+
+支持 `STORAGE_BACKEND=oss`，通过服务端 STS 按当前用户的单个待上传资产授权；Web 大文件分片上传，后端校验并复制到不可由上传凭证覆盖的 accepted 路径。角色策略、CORS、回放和切换步骤见 [OSS 接入](docs/oss-storage.md)。切换前可在保持本地存储时运行 `python -B scripts/check_oss.py --write-probe`，或在管理后台“系统管理 → 文件存储”检查连接。
