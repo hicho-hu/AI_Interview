@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     task_mode: Literal["eager", "worker"] = "worker"
     storage_backend: Literal["local", "s3", "oss"] = "local"
     storage_path: Path = Path("var/objects")
+    # 本地对象访问链接的对外 API 根地址；留空时生成同源相对链接。
     public_base_url: str = "http://localhost:8000"
     secret_key: str = "development-only-change-this-secret-32-chars"
     encryption_key: Optional[str] = None
@@ -53,6 +54,7 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_use_ssl: bool = False
     smtp_starttls: bool = True
+    # 邀请和推广链接的前端根地址；留空时生成同源相对链接。
     web_base_url: str = "http://127.0.0.1:5173"
     wechat_app_id: str = ""
     wechat_app_secret: str = ""
@@ -119,15 +121,17 @@ class Settings(BaseSettings):
                 self.provider_api_key,
                 self.encryption_key,
                 len(self.secret_key) >= 32 and not self.secret_key.startswith("development"),
-                self.mail_mode == "smtp",
-                self.smtp_host,
-                self.smtp_from,
-                self.smtp_use_ssl or self.smtp_starttls,
-                self.web_base_url.startswith("https://"),
-                self.public_base_url.startswith("https://"),
             )
             if not all(required):
                 raise ValueError(
-                    "生产环境必须配置 MySQL/Redis/私有对象存储/Worker/真实 Provider/SMTP/HTTPS/独立密钥"
+                    "生产环境必须配置 MySQL/Redis/私有对象存储/Worker/HTTPS 真实 Provider/独立密钥"
+                )
+            if self.mail_mode == "preview":
+                raise ValueError("生产环境禁止使用邮件预览，请将 MAIL_MODE 设置为 smtp 或 disabled")
+            if self.mail_mode == "smtp" and not (
+                self.smtp_host and self.smtp_from and (self.smtp_use_ssl or self.smtp_starttls)
+            ):
+                raise ValueError(
+                    "生产环境启用 SMTP 时必须配置 SMTP_HOST、SMTP_FROM，并开启 SSL 或 STARTTLS"
                 )
         return self

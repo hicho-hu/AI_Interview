@@ -47,7 +47,7 @@ TASK_MODE=eager uv run uvicorn app.main:app --reload
 
 MySQL 使用 InnoDB、utf8mb4、大小写敏感且保留尾部空格差异的 utf8mb4_0900_bin 排序规则；时间按 UTC 写入 DATETIME(6)，加密简历/报告使用 LONGTEXT，结构化配置使用原生 JSON。
 建表 SQL：[ai_interview_mysql.sql](docs/sql/ai_interview_mysql.sql)。可导入空 MySQL 数据库，或使用 Alembic 初始化，二者选择一种。旧 PostgreSQL 文件仅作历史存档。
-建表文件的 18 张表、185 个字段均包含中文 COMMENT，说明状态枚举、单位、关联和加密含义。现有库补充注释使用 [增量注释 SQL](docs/sql/update_ai_interview_mysql_comments.sql)，不要重新执行建表文件：
+建表文件的全部表和字段均包含中文 COMMENT，说明状态枚举、单位、关联和加密含义。历史基线的 18 张表、185 个字段可使用 [增量注释 SQL](docs/sql/update_ai_interview_mysql_comments.sql) 补充注释，不要重新执行建表文件：
 
 ```bash
 mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 3306 -u root AI_Interview < docs/sql/update_ai_interview_mysql_comments.sql
@@ -126,7 +126,7 @@ OCR、实时音视频/数字人、报告 PDF 导出、成长曲线是原文档�
 
 分类面试权益的套餐配置、类型余额、历史通用次数兼容和迁移说明见 [分类面试权益](docs/typed-entitlements.md)。
 
-邮箱注册、邀请奖励与分佣推广已接入，配置和接口见 [邮箱账号与推广](docs/accounts-growth.md)。当前 Web 使用邮箱注册/密码登录；手机号与网页第三方登录暂缓。开发邮件默认预览验证码，正式部署需配置 SMTP。
+邮箱注册、邀请奖励与分佣推广已接入，配置和接口见 [邮箱账号与推广](docs/accounts-growth.md)。当前 Web 使用邮箱注册/密码登录；手机号与网页第三方登录暂缓。开发邮件默认预览验证码；生产暂不使用邮件时设置 `MAIL_MODE=disabled`，启用邮件时再配置 SMTP。
 
 ## 阿里云 OSS
 

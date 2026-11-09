@@ -2,7 +2,7 @@ import io
 from pathlib import Path
 
 from alembic.config import Config
-from sqlalchemy import inspect
+from sqlalchemy import create_engine, inspect
 
 from alembic import command
 from app.core.config import Settings
@@ -37,6 +37,9 @@ def test_migration_round_trip_and_mysql_sql(tmp_path):
     assert "RETURNING" not in sql
     assert sql.count("ADD CONSTRAINT fk_interview_resume") == 1
     assert sql.count("ADD CONSTRAINT fk_turn_answer") == 1
+    assert sql.count("system_avatar_key VARCHAR(16)") == 1
+    assert sql.count("alipay_account_encrypted LONGTEXT") == 1
+    assert sql.count("settled_at DATETIME(6)") == 1
     exported = (Path(__file__).parents[1] / "docs/sql/ai_interview_mysql.sql").read_text(encoding="utf-8")
     import re
 
@@ -56,6 +59,35 @@ def test_migration_round_trip_and_mysql_sql(tmp_path):
     command.downgrade(config, "head:base", sql=True)
     assert output.getvalue().count("DROP TABLE ") == len(Base.metadata.tables) + 1
     assert "DROP INDEX" not in output.getvalue()
+
+
+def test_growth_columns_belong_to_their_own_migration_revisions(tmp_path):
+    url = f"sqlite:///{tmp_path}/growth-revisions.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.attributes["database_url"] = url
+    engine = create_engine(url)
+
+    def columns(table):
+        return {column["name"] for column in inspect(engine).get_columns(table)}
+
+    try:
+        command.upgrade(config, "c83f5a7e0203")
+        assert "system_avatar_key" not in columns("user_accounts")
+        assert "alipay_account_encrypted" not in columns("promotion_links")
+        assert "settled_at" not in columns("promotion_commissions")
+        command.upgrade(config, "d4e6a8b10321")
+        assert "system_avatar_key" in columns("user_accounts")
+        assert "alipay_account_encrypted" not in columns("promotion_links")
+        command.upgrade(config, "head")
+        assert "alipay_account_encrypted" in columns("promotion_links")
+        assert "settled_at" in columns("promotion_commissions")
+        command.check(config)
+        command.downgrade(config, "c83f5a7e0203")
+        assert "system_avatar_key" not in columns("user_accounts")
+        assert "alipay_account_encrypted" not in columns("promotion_links")
+        assert "settled_at" not in columns("promotion_commissions")
+    finally:
+        engine.dispose()
 
 
 def test_admin_feedback_health_and_validation(client):

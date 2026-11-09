@@ -49,7 +49,15 @@ def test_mysql_timestamps_preserve_utc_and_microseconds():
     assert field.process_result_value(stored, sqlite.dialect()) == restored
 
 
-def test_production_database_guard_accepts_mysql_and_rejects_postgres():
+@pytest.mark.parametrize(
+    "base_urls",
+    [
+        {},
+        {"public_base_url": "http://localhost:8000", "web_base_url": "http://localhost:8000"},
+        {"public_base_url": "", "web_base_url": ""},
+    ],
+)
+def test_production_database_guard_accepts_mysql_and_rejects_postgres(base_urls):
     values = dict(
         environment="production",
         storage_backend="s3",
@@ -62,9 +70,8 @@ def test_production_database_guard_accepts_mysql_and_rejects_postgres():
         mail_mode="smtp",
         smtp_host="smtp.example.test",
         smtp_from="noreply@example.test",
-        web_base_url="https://web.example.test",
-        public_base_url="https://app.example.test",
     )
+    values.update(base_urls)
     assert Settings(_env_file=None, **values).database_url.startswith("mysql+pymysql://")
     with pytest.raises(ValueError, match="MySQL"):
         Settings(_env_file=None, database_url="postgresql://test:test@localhost/test", **values)

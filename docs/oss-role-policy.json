@@ -1,0 +1,15 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetBucketAcl"],
+      "Resource": ["acs:oss:*:*:ai-interview-storage"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetObject", "oss:PutObject", "oss:DeleteObject", "oss:AbortMultipartUpload", "oss:ListParts"],
+      "Resource": ["acs:oss:*:*:ai-interview-storage/ai-interview/user/*"]
+    }
+  ]
+}

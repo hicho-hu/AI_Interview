@@ -2,6 +2,9 @@
 .venv
 .idea
 .env
+.env.*
+!.env.example
+wheelhouse
 var
 tests
 __pycache__

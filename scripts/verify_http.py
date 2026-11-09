@@ -6,7 +6,12 @@ import sys
 import time
 
 import httpx
-import smoke
+
+# Support both `python scripts/verify_http.py` and `python -m scripts.verify_http`.
+if __package__:
+    from . import smoke
+else:
+    import smoke
 
 if __name__ == "__main__":
     if os.environ.get("ENVIRONMENT", "development") == "production":

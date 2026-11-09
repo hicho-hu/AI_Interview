@@ -44,7 +44,9 @@ class DashScopeTTS:
         s = self.settings
         synthesizer = None
         sink, turn_id = live_sink.get(), audio_turn.get()
-        done, chunks, failures = Event(), [], []
+        done = Event()
+        chunks: list[bytes] = []
+        failures: list[str] = []
 
         class Callback(ResultCallback):
             def on_data(self, data):
@@ -53,14 +55,15 @@ class DashScopeTTS:
                     done.set()
                     return
                 chunks.append(data)
-                sink(
-                    {
-                        "type": "audio",
-                        "turn_id": turn_id,
-                        "sample_rate": 24000,
-                        "pcm": base64.b64encode(data).decode(),
-                    }
-                )
+                if sink:
+                    sink(
+                        {
+                            "type": "audio",
+                            "turn_id": turn_id,
+                            "sample_rate": 24000,
+                            "pcm": base64.b64encode(data).decode(),
+                        }
+                    )
 
             def on_complete(self):
                 done.set()

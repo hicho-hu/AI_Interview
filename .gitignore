@@ -14,3 +14,5 @@ var/
 *.egg-info/
 dist/
 build/
+# 可重新下载的离线 Python 依赖缓存。
+wheelhouse/
