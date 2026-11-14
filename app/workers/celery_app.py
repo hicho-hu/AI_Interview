@@ -28,11 +28,16 @@ def pump():
     from app.core.security import utcnow
     from app.db.models import Task
     from app.runtime import Runtime
-    from app.workers.processor import eligible
+    from app.workers.processor import eligible, task_ids_for_runtime
 
     rt = Runtime(settings)
     with rt.db.session() as db:
-        tasks = db.scalars(select(Task).where(eligible()).with_for_update(skip_locked=True).limit(100)).all()
+        task_ids = task_ids_for_runtime(rt, db)
+        tasks = db.scalars(
+            select(Task)
+            .where(Task.id.in_(task_ids), eligible())
+            .with_for_update(skip_locked=True)
+        ).all()
         for task in tasks:
             task.status = "QUEUED"
             task.lease_until = utcnow() + timedelta(seconds=settings.task_lease_seconds)

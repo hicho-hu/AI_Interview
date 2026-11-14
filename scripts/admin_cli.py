@@ -24,7 +24,7 @@ def main():
     settings = Settings()
     password = os.environ.get("ADMIN_BOOTSTRAP_PASSWORD") or secrets.token_urlsafe(24)
     mfa = None
-    if args.enable_mfa or settings.environment == "production":
+    if args.enable_mfa or settings.admin_mfa_required:
         import base64
 
         mfa = base64.b32encode(os.urandom(20)).decode()

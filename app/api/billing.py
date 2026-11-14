@@ -53,7 +53,8 @@ def products(request: Request, db=Depends(db_session, scope="function"), user=De
         {
             "items": catalog(db),
             "payment_enabled": False,
-            "development_mock_payment": request.app.state.runtime.settings.environment != "production",
+            "mock_payment_enabled": request.app.state.runtime.settings.mock_payment_enabled,
+            "development_mock_payment": request.app.state.runtime.settings.mock_payment_enabled,
         },
     )
 

@@ -62,7 +62,7 @@ def render_initial_data_sql(login_name="admin", display_name="超级管理员", 
         "-- 先完成 ai_interview_mysql.sql 建表或 alembic upgrade head，再导入本文件。",
         "-- 生成器：python -m scripts.export_initial_data_sql；使用方法见 docs/initial-data.md。",
         "-- 共享模板不含凭证；首次导入前在同一连接设置 @bootstrap_admin_password_hash，",
-        "-- 并设置 @bootstrap_admin_mfa_secret_encrypted（开发环境可为 NULL）。",
+        "-- 并设置 @bootstrap_admin_mfa_secret_encrypted（未启用 MFA 时可为 NULL）。",
         "-- 推荐导入生成器输出的 var/bootstrap/init_ai_interview_mysql.sql，已包含所需变量。",
         "-- 生产 MFA 密文须由与应用相同的 SECRET_KEY / ENCRYPTION_KEY 生成。",
         "-- 按登录名、SKU 编码和邀请配置是否存在补缺；不覆盖账号密码、角色、状态或运营配置。",
@@ -183,7 +183,7 @@ def export_initial_data(output_dir, settings, login_name="admin", display_name="
     )
     mfa_secret = (
         base64.b32encode(secrets.token_bytes(20)).decode()
-        if enable_mfa or settings.environment == "production"
+        if enable_mfa or settings.admin_mfa_required
         else None
     )
     mfa_encrypted = Security(settings).encrypt(mfa_secret) if mfa_secret else None

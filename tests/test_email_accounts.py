@@ -222,11 +222,12 @@ def test_smtp_delivery_returns_no_preview_code(client, monkeypatch, purpose, moc
     assert len(messages) == 1 and messages[0]["To"] == "recipient@example.com"
 
 
-def test_production_refuses_preview_email_codes(client):
+def test_production_returns_preview_email_codes_when_configured(client):
     client.app.state.runtime.settings.environment = "production"
     response = client.post("/api/v1/auth/email-code", json={"email": "recipient@example.com"})
-    assert response.status_code == 503
-    assert "development_code" not in response.text
+    result = data(response)
+    assert result["delivery"] == "development_preview"
+    assert len(result["development_code"]) == 6
 
 
 def test_production_registration_mock_creates_real_account_without_smtp(client, monkeypatch):

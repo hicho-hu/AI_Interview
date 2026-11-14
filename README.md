@@ -15,7 +15,7 @@ cd /Users/huichao/PycharmProjects/AI_Interview
 .venv/bin/python -m scripts.start_local
 ```
 
-脚本检查 FFmpeg/FFprobe、MySQL、Redis，未运行时尝试启动本机 MacPorts MySQL 和已安装的 Redis，自动执行 Alembic 迁移，并等待 API 就绪和 Worker 响应。启动 MySQL 可能提示输入本机管理员密码。重复执行会复用已记录且身份匹配的应用进程；日志在 `var/logs/`，PID 在 `var/run/services.json`。此脚本适用于当前 development 环境，服务在关闭终端后继续运行。
+脚本检查 FFmpeg/FFprobe、MySQL、Redis，未运行时尝试启动本机 MacPorts MySQL 和已安装的 Redis，自动执行 Alembic 迁移，并等待 API 就绪和 Worker 响应。启动 MySQL 可能提示输入本机管理员密码。重复执行会复用已记录且身份匹配的应用进程；日志在 `var/logs/`，PID 在 `var/run/services.json`。脚本读取当前 `.env`，支持所有环境，服务在关闭终端后继续运行。
 
 推荐完整启动（MySQL、Redis、MinIO、迁移、API、Worker、Beat）：
 
@@ -31,7 +31,7 @@ docker compose up -d mysql redis
 TASK_MODE=eager .venv/bin/uvicorn app.main:app --reload
 ```
 
-上述 eager 是本地任务执行模式，仍使用真实 MySQL/Redis；默认 worker 模式下还需启动 Celery Worker 和 Beat，Compose 会自动启动它们。
+上述 eager 在请求提交后执行任务；默认 worker 模式由 API 内置后台执行器兜底，无需先运行 Celery Worker/Beat 即可解析岗位和创建面试。设置 `TASK_FALLBACK_ENABLED=false` 后才完全依赖独立 Worker/Beat；Compose 会自动启动它们。
 
 新机器使用 uv：
 
@@ -99,7 +99,7 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 3306 -u root AI_Interview 
 Compose 会从项目 `.env` 或 shell 环境读取 Provider、模型、API Key、TTS 地址与费率，统一传给 API、Worker 和 Beat。按上述 Qwen 配置保存后执行 `docker compose up -d --build` 即可应用；未配置时仍默认使用 mock。
 
 MP3/M4A/AAC/WebM/MP4 实际校验和 ASR 音轨转换需要 FFmpeg/FFprobe，Docker 已包含。本机开发请先安装（macOS MacPorts：`sudo port install ffmpeg`；Homebrew：`brew install ffmpeg`；Debian/Ubuntu：`sudo apt-get install ffmpeg`），确保 API 和 Worker 均可执行这两个工具。也可从 [FFmpeg 下载页](https://ffmpeg.org/download.html) 获取系统对应的构建，在 `.env` 配置 `FFMPEG_BIN`、`FFPROBE_BIN` 为可执行文件的绝对路径，随后重启 API 和 Worker。本地启动脚本会先检查两项工具，缺失时立即提示；WAV 校验和文字路径无需该依赖。
-生产媒体经对象存储直传；local-objects 仅是开发存储模拟端点，生产禁用。S3 校验后条件复制到 accepted/ 键，避免旧上传 URL 覆盖已接收的内容。
+对象存储媒体使用直传；选择 local 存储或兼容 OSS 历史本地文件时，所有环境均可使用带有效签名的 local-objects 端点。S3 校验后条件复制到 accepted/ 键，避免旧上传 URL 覆盖已接收的内容。
 对象存储需配置 HTTPS、客户端 CORS、到期生命周期及私有访问；网关需能访问签名 file_url。应用每小时安排过期对象删除；本地 eager 可运行 `python -m app.workers.maintenance` 执行清理。
 
 ## 测试与交付边界
@@ -113,7 +113,7 @@ MP3/M4A/AAC/WebM/MP4 实际校验和 ASR 音轨转换需要 FFmpeg/FFprobe，Doc
 
 测试默认使用独立临时 SQLite 数据库和合成媒体，不依赖外部服务；SQLite 仅为可选测试后端。设置 `TEST_DATABASE_URL=mysql+pymysql://...` 可运行真实 MySQL 测试，每个测试自动创建并清理独立随机数据库，测试账号需具备 CREATE/DROP DATABASE 权限。CI 已切换至 MySQL 8.4。
 MySQL 的真实集成测试会验证迁移往返、元数据一致性、大报告写入及区分大小写的幂等键。当前本机没有 Docker/MySQL/Redis/ffprobe，未声称完成这些组件的本机真实集成验收；已提供 Compose、CI 与离线 MySQL SQL 校验。
-微信与真实 AI/云存储需要自己的凭证；本次未进行收费外部调用。真实支付、周期自动续费会员、云存储账单对账是供应商接入边界，生产不提供模拟支付。MONTHLY 目前为 20 次额度包，不含自动续费及到期扣回逻辑。
+微信与真实 AI/云存储需要自己的凭证。真实支付、周期自动续费会员、云存储账单对账是供应商接入边界；模拟购买由 `MOCK_PAYMENT_ENABLED` 控制，默认在所有环境可用，不产生真实扣款。MONTHLY 目前为 20 次额度包，不含自动续费及到期扣回逻辑。
 OCR、实时音视频/数字人、报告 PDF 导出、成长曲线是原文档后续增强项，未作为首版必备能力实现。
 单场成本阈值和全局每日成本阈值为软预算，详见 Provider 接入说明。真实音频质量、视频真机、弱网和并发容量需在部署环境验收。
 
@@ -126,7 +126,7 @@ OCR、实时音视频/数字人、报告 PDF 导出、成长曲线是原文档�
 
 分类面试权益的套餐配置、类型余额、历史通用次数兼容和迁移说明见 [分类面试权益](docs/typed-entitlements.md)。
 
-邮箱注册、邀请奖励与分佣推广已接入，配置和接口见 [邮箱账号与推广](docs/accounts-growth.md)。当前 Web 使用邮箱注册/密码登录；手机号与网页第三方登录暂缓。开发邮件默认预览验证码；生产暂不使用邮件时设置 `MAIL_MODE=disabled`，启用邮件时再配置 SMTP。
+邮箱注册、邀请奖励与分佣推广已接入，配置和接口见 [邮箱账号与推广](docs/accounts-growth.md)。当前 Web 使用邮箱注册/密码登录；手机号与网页第三方登录暂缓。`MAIL_MODE=preview` 在所有环境返回测试验证码；不使用邮件时设置 `disabled`，真实发信时再配置 SMTP。开发初期上线方式见 [生产功能与任务执行](docs/early-production.md)。
 
 生产临时测试注册可设置 `MAIL_MODE=disabled` 和 `REGISTRATION_EMAIL_MOCK_ENABLED=true`：页面展示本次随机验证码，正常创建真实账号，未验证邮箱归属。仅注册邮件受此开关影响；找回密码和换绑邮箱不会返回模拟验证码。Docker Compose 已透传该开关，修改环境配置后需重新创建 API 容器。恢复真实注册时关闭该开关并配置 SMTP，详见上述文档。
 

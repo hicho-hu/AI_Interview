@@ -223,8 +223,6 @@ def run():
     if not PYTHON.exists():
         raise RuntimeError("请先执行 uv sync --locked --extra dev 安装项目依赖")
     settings = Settings()
-    if settings.environment != "development":
-        raise RuntimeError("此脚本仅用于 development 本机环境；部署请使用 Compose")
     media_tools(settings)
     dependencies(settings)
     # Use the same environment in API, Worker, Beat, and the readiness inspector.

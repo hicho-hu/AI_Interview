@@ -12,7 +12,13 @@ from app.core.errors import BusinessError
 class Cache:
     def __init__(self, settings):
         self.settings = settings
-        self.redis = Redis.from_url(settings.redis_url, decode_responses=True) if settings.redis_url else None
+        self.redis = (
+            Redis.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2
+            )
+            if settings.redis_url
+            else None
+        )
         self.local = OrderedDict()
         self.mutex = threading.RLock()
 
@@ -31,7 +37,7 @@ class Cache:
                 )
                 return int(cast(Any, count)) <= limit
             except RedisError as exc:
-                if self.settings.environment == "production":
+                if self.settings.redis_required:
                     raise BusinessError("DEPENDENCY_UNAVAILABLE", "限流服务暂不可用", 503) from exc
         with self.mutex:
             value, expires = self.local.get(key, (0, 0))

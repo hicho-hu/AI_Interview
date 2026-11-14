@@ -12,7 +12,7 @@ from app.modules.shared import Service
 class IdentityService(Service):
     def login(self, identity, nickname, dev=False):
         if dev:
-            require(self.rt.settings.environment != "production", "AUTH_DISABLED", "开发登录已禁用", 404)
+            require(self.rt.settings.dev_login_enabled, "AUTH_DISABLED", "体验登录已禁用", 404)
             identity = "dev:" + identity
         else:
             settings = self.rt.settings

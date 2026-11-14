@@ -39,10 +39,9 @@ def test_production_can_disable_mail_without_smtp(production_config):
     assert settings.mail_mode == "disabled"
 
 
-def test_production_rejects_preview_mail(production_config):
+def test_production_allows_configured_preview_mail(production_config):
     production_config["mail_mode"] = "preview"
-    with pytest.raises(ValueError, match="生产环境禁止使用邮件预览"):
-        Settings(_env_file=None, **production_config)
+    assert Settings(_env_file=None, **production_config).mail_mode == "preview"
 
 
 def test_production_registration_mock_is_opt_in_and_needs_no_smtp(production_config):
@@ -69,7 +68,7 @@ def test_registration_mock_can_be_enabled_from_environment(production_config, mo
 )
 def test_production_smtp_requires_address_and_encryption(production_config, missing):
     production_config.update(missing)
-    with pytest.raises(ValueError, match="生产环境启用 SMTP"):
+    with pytest.raises(ValueError, match="启用 SMTP"):
         Settings(_env_file=None, **production_config)
 
 

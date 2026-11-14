@@ -354,7 +354,7 @@ class AdminService(Service):
         require(order.status == "PAID", "REFUND_INVALID_STATE", "仅已支付订单可退款", 409)
         require(
             (order.provider_trade_no or "").startswith("dev:")
-            and self.rt.settings.environment != "production",
+            and self.rt.settings.mock_payment_enabled,
             "REFUND_ADAPTER_NOT_CONFIGURED",
             "真实渠道退款适配器尚未配置",
             503,

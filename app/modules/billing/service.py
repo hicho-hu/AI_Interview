@@ -212,9 +212,9 @@ class BillingService(Service):
 
     def pay(self, order_id, key):
         require(
-            self.rt.settings.environment != "production",
+            self.rt.settings.mock_payment_enabled,
             "BILLING_PAYMENT_NOT_CONFIGURED",
-            "真实支付适配器尚未配置",
+            "当前服务未开启模拟支付",
             503,
         )
 
@@ -247,9 +247,9 @@ class BillingService(Service):
 
     def refund(self, order_id, key):
         require(
-            self.rt.settings.environment != "production",
+            self.rt.settings.mock_payment_enabled,
             "BILLING_REFUND_NOT_CONFIGURED",
-            "真实退款适配器尚未配置",
+            "当前服务未开启模拟支付退款",
             503,
         )
 
@@ -257,6 +257,12 @@ class BillingService(Service):
             self.lock_user()
             row = owned(self.db, Order, order_id, self.uid)
             require(row.status in ("PAID", "REFUNDED"), "BILLING_INVALID_STATE", "订单不可退款", 409)
+            require(
+                (row.provider_trade_no or "").startswith("dev:"),
+                "BILLING_REFUND_NOT_CONFIGURED",
+                "真实渠道退款适配器尚未配置",
+                503,
+            )
             changed = self.db.execute(
                 update(Order)
                 .where(Order.id == order_id, Order.status == "PAID")

@@ -1,6 +1,7 @@
 import logging
 from datetime import timedelta
 
+from cryptography.fernet import InvalidToken
 from sqlalchemy import and_, or_, select, update
 
 from app.core.errors import BusinessError, require
@@ -25,20 +26,53 @@ def eligible():
     )
 
 
-def process_available(runtime, limit=100):
-    count = 0
-    for _ in range(limit):
+def readable_payload(runtime, payload):
+    if not payload:
+        return False
+    try:
+        runtime.security.decrypt(payload)
+    except (InvalidToken, ValueError, TypeError):
+        return False
+    return True
+
+
+def task_ids_for_runtime(runtime, db, limit=100, include_queued=False):
+    # Shared databases may contain tasks encrypted by a different deployment.
+    # Check before claiming, so another deployment cannot exhaust their retries.
+    condition = or_(eligible(), Task.status == "QUEUED") if include_queued else eligible()
+    rows = db.execute(
+        select(Task.id, Task.payload_encrypted).where(condition).order_by(Task.created_at, Task.id)
+    )
+    task_ids = []
+    try:
+        for task_id, payload in rows.yield_per(100):
+            if readable_payload(runtime, payload):
+                task_ids.append(task_id)
+                if len(task_ids) >= limit:
+                    break
+    finally:
+        rows.close()
+    return task_ids
+
+
+def process_available(runtime, limit=100, include_queued=False):
+    attempted = count = 0
+    while attempted < limit:
         with runtime.db.session() as db:
-            task_id = db.scalar(select(Task.id).where(eligible()).order_by(Task.created_at).limit(1))
-        if not task_id:
+            task_ids = task_ids_for_runtime(runtime, db, min(10, limit - attempted), include_queued)
+        if not task_ids:
             break
-        count += int(process_task(runtime, task_id))
+        attempted += len(task_ids)
+        count += sum(int(process_task(runtime, task_id)) for task_id in task_ids)
     return count
 
 
 def process_task(rt, task_id):
     token = new_id()
     with rt.db.session() as db:
+        payload = db.scalar(select(Task.payload_encrypted).where(Task.id == task_id))
+        if not readable_payload(rt, payload):
+            return False
         claimed = db.execute(
             update(Task)
             .where(Task.id == task_id, or_(eligible(), Task.status == "QUEUED"))
@@ -72,7 +106,9 @@ def process_task(rt, task_id):
             db.add_all(logs)
     except Exception as exc:
         code = exc.code if isinstance(exc, BusinessError) else "TASK_INTERNAL_ERROR"
-        logger.warning("task_failed", extra={"task_id": task_id, "error_code": code})
+        logger.warning(
+            "task_failed", extra={"task_id": task_id, "error_code": code, "error_type": type(exc).__name__}
+        )
         with rt.db.session() as db:
             task = db.scalar(
                 select(Task).where(Task.id == task_id, Task.lease_token == token).with_for_update()
@@ -160,7 +196,15 @@ def mark_failed(rt, db, task):
 
 
 def retry_task(rt, db, task, user_id):
-    require(task.user_id == user_id, "RESOURCE_NOT_FOUND", "任务不存在", 404)
+    task = db.scalar(
+        select(Task)
+        .where(Task.id == task.id, Task.user_id == user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    require(task, "RESOURCE_NOT_FOUND", "任务不存在", 404)
+    if task.status in ("PENDING", "QUEUED", "RUNNING", "RETRYING", "SUCCEEDED"):
+        return {"task_id": task.id, "status": task.status}
     require(task.status == "FAILED", "TASK_INVALID_STATE", "仅失败任务可重试", 409)
     if task.event_type == "PREPARE_INTERVIEW":
         row = db.get(Interview, task.aggregate_id)
@@ -186,6 +230,14 @@ def retry_task(rt, db, task, user_id):
             409,
         )
         turn.status = "SUBMITTED"
+    elif task.event_type == "PARSE_JOB":
+        row = db.get(JobProfile, task.aggregate_id)
+        require(row, "RESOURCE_NOT_FOUND", "岗位不存在", 404)
+        row.status = "PREPARING"
+    elif task.event_type == "PARSE_RESUME":
+        row = db.get(ResumeAsset, task.aggregate_id)
+        require(row and row.parse_status != "DELETED", "RESOURCE_NOT_FOUND", "简历不存在", 404)
+        row.parse_status = "PARSING"
     task.status, task.retry_count, task.error_code, task.available_at = "PENDING", 0, None, utcnow()
     return {"task_id": task.id, "status": task.status}
 

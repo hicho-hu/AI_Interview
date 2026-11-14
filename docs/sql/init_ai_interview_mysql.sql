@@ -2,7 +2,7 @@
 -- 先完成 ai_interview_mysql.sql 建表或 alembic upgrade head，再导入本文件。
 -- 生成器：python -m scripts.export_initial_data_sql；使用方法见 docs/initial-data.md。
 -- 共享模板不含凭证；首次导入前在同一连接设置 @bootstrap_admin_password_hash，
--- 并设置 @bootstrap_admin_mfa_secret_encrypted（开发环境可为 NULL）。
+-- 并设置 @bootstrap_admin_mfa_secret_encrypted（未启用 MFA 时可为 NULL）。
 -- 推荐导入生成器输出的 var/bootstrap/init_ai_interview_mysql.sql，已包含所需变量。
 -- 生产 MFA 密文须由与应用相同的 SECRET_KEY / ENCRYPTION_KEY 生成。
 -- 按登录名、SKU 编码和邀请配置是否存在补缺；不覆盖账号密码、角色、状态或运营配置。

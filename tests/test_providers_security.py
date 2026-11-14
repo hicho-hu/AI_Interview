@@ -221,6 +221,17 @@ def test_cleanup_deletes_expired_media(client):
     assert not rt.storage.path(object_key).exists()
 
 
-def test_production_requires_real_dependencies():
-    with pytest.raises(ValueError, match="生产环境必须配置"):
-        Settings(_env_file=None, environment="production")
+@pytest.mark.parametrize("environment", ["development", "test", "production"])
+def test_feature_configuration_is_independent_of_environment(environment):
+    settings = Settings(
+        _env_file=None,
+        environment=environment,
+        database_url="sqlite:///:memory:",
+        redis_url=None,
+        task_mode="eager",
+        storage_backend="local",
+        provider_mode="mock",
+        mail_mode="preview",
+    )
+    assert settings.mock_payment_enabled and settings.dev_login_enabled
+    assert not settings.admin_mfa_required

@@ -19,7 +19,7 @@
 
 生成器只生成文件，不连接数据库。重复运行不会覆盖已生成的文件；为另一套环境生成时，用 `--output-dir var/bootstrap-rds` 指定独立目录。`--login-name` 和 `--display-name` 可修改账号和显示名；可通过环境变量 `ADMIN_BOOTSTRAP_PASSWORD` 指定 12 至 128 位密码，勿将密码放进命令行参数或提交到仓库。
 
-`ENVIRONMENT=production` 自动启用 MFA，其他环境可加 `--enable-mfa`。生成前须配置目标应用使用的同一套 `SECRET_KEY` / `ENCRYPTION_KEY`，否则应用无法解密 MFA。将凭证文件的 `mfa_uri` 或 `mfa_secret` 录入验证器，登录时提供六位动态码。这里的“环境”指应用的 `ENVIRONMENT`，使用 RDS 本身不会自动切换生产环境。
+MFA 由 `ADMIN_MFA_REQUIRED=true` 或 `--enable-mfa` 启用，与 `ENVIRONMENT` 无关。生成前须配置目标应用使用的同一套 `SECRET_KEY` / `ENCRYPTION_KEY`，否则应用无法解密 MFA。将凭证文件的 `mfa_uri` 或 `mfa_secret` 录入验证器，登录时提供六位动态码。已启用 MFA 的账号仍需动态码，不会因关闭全局强制开关而免除验证。
 
 ## 导入 RDS
 

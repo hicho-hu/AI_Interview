@@ -12,12 +12,6 @@ def deliver_code(settings, email, code, purpose):
         return {"delivery": "registration_mock", "mock_code": code}
     require(settings.mail_mode != "disabled", "EMAIL_NOT_CONFIGURED", "邮件服务未配置", 503)
     if settings.mail_mode == "preview":
-        require(
-            settings.environment != "production",
-            "EMAIL_NOT_CONFIGURED",
-            "生产环境禁止使用邮件预览",
-            503,
-        )
         return {"delivery": "development_preview", "development_code": code}
     require(settings.smtp_host and settings.smtp_from, "EMAIL_NOT_CONFIGURED", "SMTP 邮件服务未配置", 503)
     message = EmailMessage()

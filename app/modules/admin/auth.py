@@ -66,9 +66,9 @@ class AdminAuth:
             require(step is not None, "ADMIN_MFA_REQUIRED", "请输入有效且未使用的动态验证码", 401)
             row.last_mfa_step = step
         require(
-            self.rt.settings.environment != "production" or row.mfa_secret_encrypted,
+            not self.rt.settings.admin_mfa_required or row.mfa_secret_encrypted,
             "ADMIN_MFA_REQUIRED",
-            "生产环境需先通过管理命令启用 MFA",
+            "当前配置要求管理员先启用 MFA",
             403,
         )
         now, token_id = utcnow(), new_id()

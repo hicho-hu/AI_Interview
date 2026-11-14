@@ -78,7 +78,7 @@ def delete_media(
 def signed_asset(request, db, asset_id, purpose, expires, signature):
     rt = request.app.state.runtime
     require(
-        rt.settings.storage_backend in ("local", "oss") and rt.settings.environment != "production",
+        rt.settings.storage_backend in ("local", "oss"),
         "RESOURCE_NOT_FOUND",
         "不存在",
         404,

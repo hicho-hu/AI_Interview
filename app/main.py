@@ -27,13 +27,23 @@ def create_app(settings=None, runtime=None):
 
     @asynccontextmanager
     async def lifespan(app):
+        from app.workers.background import BackgroundTaskRunner
+
         # Schema changes are explicitly migrated through Alembic, including local development.
         with rt.db.engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         if rt.settings.task_mode == "eager":
             rt.drain()
-        yield
-        rt.db.engine.dispose()
+        runner = None
+        if rt.settings.task_mode == "worker" and rt.settings.task_fallback_enabled:
+            runner = BackgroundTaskRunner(rt)
+            runner.start()
+        try:
+            yield
+        finally:
+            if runner:
+                runner.stop()
+            rt.db.engine.dispose()
 
     app = FastAPI(
         title="AI 模拟面试后端",
@@ -129,7 +139,10 @@ def create_app(settings=None, runtime=None):
         try:
             with rt.db.engine.connect() as connection:
                 connection.execute(text("SELECT version_num FROM alembic_version"))
-            if rt.cache.redis:
+            if rt.cache.redis and (
+                rt.settings.redis_required
+                or (rt.settings.task_mode == "worker" and not rt.settings.task_fallback_enabled)
+            ):
                 rt.cache.redis.ping()
             if rt.settings.storage_backend == "oss":
                 rt.storage.check_ready()

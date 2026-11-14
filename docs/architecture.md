@@ -13,7 +13,7 @@ app/schemas（HTTP 与 AI 输出契约）
 alembic/（版本化数据库） tests/ deploy/ docs/
 ```
 
-API/Worker 独立运行；MySQL 8.4 为事实源；Redis 为 Celery broker、限流、短锁和热缓存；S3/COS/MinIO 私有桶签名直传。
+API 默认包含持久化任务的后台执行器，也可独立运行 Celery Worker；MySQL 8.4 为事实源；Redis 为可选 Celery broker、限流、短锁和热缓存；S3/COS/MinIO 私有桶签名直传。
 默认开发与部署连接 MySQL + Redis；SQLite 仅保留为可选测试后端。eager 模式在提交事务后处理持久化任务，用于本地开发和测试。
 生产必须使用 MySQL，禁止 mock、local storage、eager、SQLite 和开发密钥。实际 LLM/ASR/TTS 可走兼容协议 Adapter 或自有 HTTP Gateway Adapter；契约见 provider-contract.md。
 
@@ -76,7 +76,7 @@ interviews 版本列实现乐观锁；额度使用条件 UPDATE；幂等记录�
 
 ## 交付边界
 
-微信 appid/secret、对象存储、AI 网关凭证需部署方注入。真实支付未指定商户与供应商，首版仅实现订单/退款业务和开发环境模拟支付；生产接口明确返回未配置，不接受未经验签的回调。
+微信 appid/secret、对象存储、AI 网关凭证需部署方注入。真实支付未指定商户与供应商，首版实现订单/退款业务及由 `MOCK_PAYMENT_ENABLED` 控制的模拟购买，所有环境一致；不冒充真实扣款，也不接受未经验签的真实渠道回调。
 摄像头/麦克风操作属于客户端，后端记录授权并约束媒体用途；本项目交付后端。
 OCR 和报告导出在原需求列为后续项；提供网关 OCR 边界，首版支持 PDF/DOCX 提取。
 真机弱网、真实供应商质量/成本校准、20/50/100 会话压测属于部署后验收，不能由模拟测试替代。

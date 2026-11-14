@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     database_url: str = "mysql+pymysql://interview:interview-local@127.0.0.1:3306/interview?charset=utf8mb4"
     redis_url: Optional[str] = "redis://127.0.0.1:6379/0"
     task_mode: Literal["eager", "worker"] = "worker"
+    task_fallback_enabled: bool = True
+    task_poll_seconds: float = Field(1, ge=0.1, le=60)
     storage_backend: Literal["local", "s3", "oss"] = "local"
     storage_path: Path = Path("var/objects")
     # 本地对象访问链接的对外 API 根地址；留空时生成同源相对链接。
@@ -49,6 +51,10 @@ class Settings(BaseSettings):
     mail_mode: Literal["smtp", "preview", "disabled"] = "preview"
     # 临时注册测试：只模拟注册邮件，响应直接返回本次验证码；不影响找回密码或换绑邮箱。
     registration_email_mock_enabled: bool = False
+    mock_payment_enabled: bool = True
+    dev_login_enabled: bool = True
+    admin_mfa_required: bool = False
+    redis_required: bool = False
     smtp_host: str = ""
     smtp_port: int = Field(587, ge=1, le=65535)
     smtp_username: str = ""
@@ -85,7 +91,13 @@ class Settings(BaseSettings):
     task_lease_seconds: int = 900
 
     @model_validator(mode="after")
-    def production_guards(self):
+    def configuration_guards(self):
+        if not self.database_url.startswith(("mysql+pymysql://", "sqlite://")):
+            raise ValueError("数据库仅支持 MySQL（mysql+pymysql）或 SQLite")
+        if not self.redis_url and (
+            self.redis_required or (self.task_mode == "worker" and not self.task_fallback_enabled)
+        ):
+            raise ValueError("必需 Redis 或关闭内置执行器的 Worker 模式必须配置 REDIS_URL")
         if self.storage_backend == "oss" and not (
             self.aliyun_access_key_id
             and self.aliyun_access_key_secret
@@ -112,28 +124,8 @@ class Settings(BaseSettings):
             or not self.provider_api_key
         ):
             raise ValueError("DashScope TTS 必须配置 compatible Provider、WSS 地址和 API Key")
-        if self.environment == "production":
-            required = (
-                self.database_url.startswith("mysql+pymysql://"),
-                self.redis_url,
-                self.storage_backend in ("s3", "oss"),
-                self.task_mode == "worker",
-                self.provider_mode in ("http", "compatible"),
-                self.provider_url.startswith("https://"),
-                self.provider_api_key,
-                self.encryption_key,
-                len(self.secret_key) >= 32 and not self.secret_key.startswith("development"),
-            )
-            if not all(required):
-                raise ValueError(
-                    "生产环境必须配置 MySQL/Redis/私有对象存储/Worker/HTTPS 真实 Provider/独立密钥"
-                )
-            if self.mail_mode == "preview":
-                raise ValueError("生产环境禁止使用邮件预览，请将 MAIL_MODE 设置为 smtp 或 disabled")
-            if self.mail_mode == "smtp" and not (
-                self.smtp_host and self.smtp_from and (self.smtp_use_ssl or self.smtp_starttls)
-            ):
-                raise ValueError(
-                    "生产环境启用 SMTP 时必须配置 SMTP_HOST、SMTP_FROM，并开启 SSL 或 STARTTLS"
-                )
+        if self.mail_mode == "smtp" and not (
+            self.smtp_host and self.smtp_from and (self.smtp_use_ssl or self.smtp_starttls)
+        ):
+            raise ValueError("启用 SMTP 时必须配置 SMTP_HOST、SMTP_FROM，并开启 SSL 或 STARTTLS")
         return self

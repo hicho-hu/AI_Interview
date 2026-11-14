@@ -187,7 +187,10 @@ def test_failed_transcription_retries_existing_answer_with_qwen(client, monkeypa
     assert data(client.get(task_path, headers=headers))["status"] == "SUCCEEDED"
     assert data(client.get(path + "/turns", headers=headers))["items"][0]["transcript"] == ANSWER
     assert data(client.get(path + "/report", headers=headers))["status"] == "COMPLETED"
-    assert client.post(task_path + "/retry", headers=headers).status_code == 409
+    completed_calls = len(calls)
+    repeated = data(client.post(task_path + "/retry", headers=headers), 202)
+    assert repeated["status"] == "SUCCEEDED"
+    assert len(calls) == completed_calls
     repeated = data(
         client.post(submit_path, headers=submit_headers, json={"asset_id": requested["asset_id"]})
     )

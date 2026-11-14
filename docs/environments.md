@@ -1,6 +1,6 @@
 # dev 与 prod 环境配置
 
-项目根目录的 `.env.dev` 和 `.env.prod` 是本地配置文件，包含已有云服务凭证，已加入 Git 忽略规则，权限为 0600。应用默认读取当前工作目录的 `.env`，不会自动根据文件名切换环境。此次生成不修改现有 `.env`，也不重启运行中的服务。
+项目根目录的 `.env.dev` 和 `.env.prod` 是本地配置文件，包含已有云服务凭证，已加入 Git 忽略规则，权限为 0600。应用默认读取当前工作目录的 `.env`，不会自动根据文件名切换环境。功能开关在所有环境行为一致，见 [开发初期的生产功能与任务执行](early-production.md)。
 
 | 配置 | `.env.dev` | `.env.prod` |
 |---|---|---|
@@ -9,7 +9,7 @@
 | Redis | 已提供的外网地址，数据库 1 | 已提供的内网地址，数据库 0 |
 | 文件存储 | 当前 OSS 私有 Bucket | 当前 OSS 私有 Bucket |
 | AI | 当前 Qwen 配置 | 当前 Qwen 配置 |
-| 邮件 | preview，返回开发验证码 | disabled，暂不启用；使用时改为 smtp |
+| 邮件 | 可选择 preview / disabled / smtp | 同样可选择 preview / disabled / smtp |
 | 地址和 CORS | 本地前端、后台及 API | 地址可选，允许 HTTP/HTTPS；跨域时填写 CORS |
 | FFmpeg/FFprobe | 当前本机工具路径 | 使用部署服务器 PATH 中的工具 |
 
@@ -42,7 +42,7 @@ cp .env.dev .env
 
 生产暂不使用邮件时设置 `MAIL_MODE=disabled`，所有 SMTP 配置都可留空，不阻止服务启动。发送注册、找回密码和绑定邮箱验证码的接口会返回 HTTP 503 / `EMAIL_NOT_CONFIGURED`；已有账号的邮箱密码登录仍可使用。
 
-启用邮件时改为 `MAIL_MODE=smtp`，填写 `SMTP_HOST`、`SMTP_FROM`，以及邮件服务商要求的 `SMTP_USERNAME`、`SMTP_PASSWORD`，并开启 SSL 或 STARTTLS。默认 587 + STARTTLS；使用 465 时设置 `SMTP_USE_SSL=true`、`SMTP_STARTTLS=false`。生产环境禁止使用 `preview`。
+真实发信时改为 `MAIL_MODE=smtp`，填写 `SMTP_HOST`、`SMTP_FROM`，以及邮件服务商要求的 `SMTP_USERNAME`、`SMTP_PASSWORD`，并开启 SSL 或 STARTTLS。默认 587 + STARTTLS；使用 465 时设置 `SMTP_USE_SSL=true`、`SMTP_STARTTLS=false`。所有环境均允许 `MAIL_MODE=preview` 返回测试验证码。
 
 已有业务数据时必须先确认原来的 `SECRET_KEY` 和 `ENCRYPTION_KEY`，不要直接生成新值替换：`SECRET_KEY` 还参与邮箱及身份 HMAC 查找，修改会影响已有账号登录；`ENCRYPTION_KEY` 改变后无法解密旧数据。全新部署才生成新密钥；旧部署未显式设置 `ENCRYPTION_KEY` 时，还需保留从旧 `SECRET_KEY` 派生的加密密钥。
 
@@ -54,10 +54,10 @@ cp .env.dev .env
 .venv/bin/python -c "from app.core.config import Settings; Settings(_env_file='.env.prod'); print('生产配置检查通过')"
 ```
 
-未填写必需项时，该检查会失败。配置完整后复制为服务器上的 `.env`，分别启动 API、Worker、Beat；`scripts.start_local` 仅允许 development 环境。
+选择的服务缺少必需参数时，该检查会失败。配置完整后复制为服务器上的 `.env`，启动 API 即可由内置执行器处理任务；`scripts.start_local` 支持所有环境，用于完整启动 API、Worker、Beat。只有 `TASK_FALLBACK_ENABLED=false` 时，才必须另外运行 Celery Worker/Beat。
 
 当前 `docker-compose.yml` 是本机 MySQL/Redis/MinIO 的开发方案，固定覆盖部分环境变量。仅使用 `docker compose --env-file .env.prod` 不能将它变为云服务生产部署。自建容器部署时须让 API、Worker、Beat、迁移进程都加载同一份生产配置，并安装 FFmpeg/FFprobe。
 
 ## 验证范围
 
-prod 配置允许通过 `MAIL_MODE=disabled` 关闭邮件；SMTP 配置仅在启用邮件时校验。`PUBLIC_BASE_URL` 和 `WEB_BASE_URL` 不阻止启动；AI Provider 的 HTTPS 地址、云服务参数和密钥仍需满足生产约束，部署后还需验证 RDS、Redis、OSS 和 AI，启用邮件时再验证 SMTP。修改环境文件不会迁移或修改数据库、Redis、OSS 数据。
+`ENVIRONMENT` 不再单独禁用模拟购买、邮件预览、体验登录、本地文件访问或内置任务执行。模拟购买由 `MOCK_PAYMENT_ENABLED` 控制，默认可用。各类供应商参数按所选服务校验；`PUBLIC_BASE_URL` 和 `WEB_BASE_URL` 不阻止启动。部署后仍需验证实际 RDS、Redis、OSS、AI 或 SMTP 的连通性。修改环境文件不会迁移或修改数据库、Redis、OSS 数据。
